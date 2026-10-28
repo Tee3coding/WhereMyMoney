@@ -1,0 +1,10 @@
+[project]
+name = "wheremymoney"
+version = "0.1.0"
+description = "Personal income and expense tracker"
+requires-python = ">=3.9"
+dependencies = ["flet==0.28.3"]
+
+[tool.flet]
+org = "com.wheremymoney"
+product = "WhereMyMoney"
