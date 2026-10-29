@@ -10,12 +10,15 @@ ACCENTS = {
     "Teal": "#00897B", "Blue": "#1E88E5", "Purple": "#8E24AA",
     "Orange": "#FB8C00", "Pink": "#D81B60", "Green": "#43A047",
 }
+# Change any icon here and it updates everywhere in the app.
 CATEGORY_ICONS = {
     "Food": ft.Icons.RESTAURANT, "Transport": ft.Icons.DIRECTIONS_BUS,
     "Bills": ft.Icons.RECEIPT_LONG, "Shopping": ft.Icons.SHOPPING_BAG,
     "Health": ft.Icons.FAVORITE, "Entertainment": ft.Icons.MOVIE,
     "Salary": ft.Icons.PAYMENTS, "Other": ft.Icons.MORE_HORIZ,
+    "All": ft.Icons.APPS,
 }
+WALLET_ICONS = {"Bank": ft.Icons.ACCOUNT_BALANCE, "Wallet": ft.Icons.ACCOUNT_BALANCE_WALLET, "All": ft.Icons.APPS}
 PIE_COLORS = [ft.Colors.BLUE, ft.Colors.ORANGE, ft.Colors.GREEN, ft.Colors.PURPLE,
               ft.Colors.TEAL, ft.Colors.PINK, ft.Colors.AMBER, ft.Colors.CYAN]
 ALL = "All"
@@ -38,9 +41,18 @@ def field(**kwargs):
     return ft.TextField(filled=True, border_radius=12, border_width=0, **kwargs)
 
 
+def icon_options(names, icons):
+    return [ft.dropdown.Option(key=n, text=n, leading_icon=icons.get(n, ft.Icons.MORE_HORIZ)) for n in names]
+
+
 def dropdown(label_text, value, options, **kwargs):
-    return ft.Dropdown(label=label_text, value=value, filled=True, border_radius=12, border_width=0,
-                       options=[ft.dropdown.Option(o) for o in options], **kwargs)
+    return ft.Dropdown(label=label_text, value=value, options=options, filled=True,
+                       border_radius=12, border_width=0, **kwargs)
+
+
+def kind_options():
+    return [ft.dropdown.Option(key="expense", text="Expense", leading_icon=ft.Icons.ARROW_DOWNWARD),
+            ft.dropdown.Option(key="income", text="Income", leading_icon=ft.Icons.ARROW_UPWARD)]
 
 
 def main(page: ft.Page):
@@ -48,7 +60,7 @@ def main(page: ft.Page):
     sv.CURRENCY = db.get_setting("currency", "RM")
     db.apply_recurring(sv.today())
     accent = {"value": db.get_setting("accent", ACCENTS["Teal"])}
-    state = {"month": sv.today()[:7], "kind": "expense"}
+    state = {"month": sv.today()[:7], "kind": "expense", "wallet": "Wallet"}
 
     def apply_theme():
         page.theme = ft.Theme(color_scheme_seed=accent["value"])
@@ -65,7 +77,7 @@ def main(page: ft.Page):
     def toast(message):
         page.open(ft.SnackBar(ft.Text(message)))
 
-    def confirm(title, text, on_yes):
+    def confirm(title, text, on_yes, yes_label="Delete"):
         def yes(e):
             page.close(dialog)
             on_yes()
@@ -73,16 +85,19 @@ def main(page: ft.Page):
         dialog = ft.AlertDialog(
             title=ft.Text(title), content=ft.Text(text),
             actions=[ft.TextButton("Cancel", on_click=lambda e: page.close(dialog)),
-                     ft.TextButton("Delete", on_click=yes)],
+                     ft.TextButton(yes_label, on_click=yes)],
         )
         page.open(dialog)
 
     def prefix():
         return f"{sv.CURRENCY} "
 
-    # ================= ADD =================
+    # ================= HOME: add form =================
     def on_kind(e):
         state["kind"] = next(iter(e.control.selected))
+
+    def on_wallet(e):
+        state["wallet"] = next(iter(e.control.selected))
 
     kind = ft.SegmentedButton(
         selected={"expense"}, allow_multiple_selection=False, show_selected_icon=False, on_change=on_kind,
@@ -91,9 +106,12 @@ def main(page: ft.Page):
             ft.Segment(value="income", label=ft.Text("Income"), icon=ft.Icon(ft.Icons.ARROW_UPWARD)),
         ],
     )
+    wallet_seg = ft.SegmentedButton(
+        selected={"Wallet"}, allow_multiple_selection=False, show_selected_icon=False, on_change=on_wallet,
+        segments=[ft.Segment(value=w, label=ft.Text(w), icon=ft.Icon(WALLET_ICONS[w])) for w in db.WALLETS],
+    )
     amount = field(label="Amount", prefix_text=prefix(), text_size=28, keyboard_type=ft.KeyboardType.NUMBER)
-    category = dropdown("Category", db.CATEGORIES[0], db.CATEGORIES)
-    wallet_dd = dropdown("Wallet", db.list_wallets()[0], db.list_wallets())
+    category = dropdown("Category", db.CATEGORIES[0], icon_options(db.CATEGORIES, CATEGORY_ICONS))
     date_field = field(label="Date", value=sv.today(), read_only=True, suffix_icon=ft.Icons.CALENDAR_MONTH)
     note = field(label="Note (optional)")
     error = ft.Text(color=ft.Colors.RED)
@@ -118,7 +136,7 @@ def main(page: ft.Page):
             error.value = str(problem)
             page.update()
             return
-        db.add_transaction(cents, state["kind"], category.value, wallet_dd.value, day,
+        db.add_transaction(cents, state["kind"], category.value, state["wallet"], day,
                            (note.value or "").strip())
         amount.value = ""
         note.value = ""
@@ -127,26 +145,24 @@ def main(page: ft.Page):
         toast("Saved")
         amount.focus()
 
-    add_view = ft.Column(
+    add_section = ft.Column(
         [
-            heading("Add transaction"),
+            heading("New transaction"),
             ft.Row([kind], alignment=ft.MainAxisAlignment.CENTER),
-            card(amount, category, wallet_dd, date_field, note, error),
+            card(amount, category, ft.Text("Account"), wallet_seg, date_field, note, error),
             ft.Row([ft.FilledButton("Save transaction", icon=ft.Icons.CHECK, height=50, expand=True,
                                     on_click=save)]),
         ],
-        scroll=ft.ScrollMode.AUTO, spacing=16,
+        spacing=16,
     )
 
     # ================= EDIT DIALOG =================
     def open_edit(t):
         amt = field(label="Amount", value=f"{t['amount_cents'] / 100:.2f}", prefix_text=prefix(),
                     keyboard_type=ft.KeyboardType.NUMBER)
-        kind_dd = ft.Dropdown(label="Type", value=t["type"], filled=True, border_radius=12, border_width=0,
-                              options=[ft.dropdown.Option(key="expense", text="Expense"),
-                                       ft.dropdown.Option(key="income", text="Income")])
-        cat = dropdown("Category", t["category"], db.CATEGORIES)
-        wal = dropdown("Wallet", t["wallet"], db.list_wallets())
+        kind_dd = dropdown("Type", t["type"], kind_options())
+        cat = dropdown("Category", t["category"], icon_options(db.CATEGORIES, CATEGORY_ICONS))
+        wal = dropdown("Account", t["wallet"], icon_options(db.WALLETS, WALLET_ICONS))
         day = field(label="Date (YYYY-MM-DD)", value=t["date"])
         nt = field(label="Note", value=t["note"])
         err = ft.Text(color=ft.Colors.RED)
@@ -174,7 +190,7 @@ def main(page: ft.Page):
         )
         page.open(dialog)
 
-    # ================= HISTORY (search + filters) =================
+    # ================= HOME: history (search + filters) =================
     month_labels = []
 
     def change_month(delta):
@@ -197,22 +213,27 @@ def main(page: ft.Page):
             db.delete_transaction(transaction_id), refresh(), toast("Deleted")))
 
     f_search = field(label="Search notes or categories", prefix_icon=ft.Icons.SEARCH, on_change=lambda e: refresh())
-    f_category = dropdown("Category", ALL, [ALL] + db.CATEGORIES, width=150, on_change=lambda e: refresh())
-    f_kind = ft.Dropdown(label="Type", value=ALL, filled=True, border_radius=12, border_width=0, width=130,
-                         on_change=lambda e: refresh(),
-                         options=[ft.dropdown.Option(ALL), ft.dropdown.Option(key="expense", text="Expense"),
-                                  ft.dropdown.Option(key="income", text="Income")])
-    f_wallet = dropdown("Wallet", ALL, [ALL] + db.list_wallets(), width=140, on_change=lambda e: refresh())
+    f_category = dropdown("Category", ALL, icon_options([ALL] + db.CATEGORIES, CATEGORY_ICONS),
+                          width=160, on_change=lambda e: refresh())
+    f_kind = dropdown("Type", ALL, [ft.dropdown.Option(ALL)] + kind_options(), width=140,
+                      on_change=lambda e: refresh())
+    f_wallet = dropdown("Account", ALL, icon_options([ALL] + db.WALLETS, WALLET_ICONS),
+                        width=150, on_change=lambda e: refresh())
     f_all_months = ft.Switch(label="All months", value=False, on_change=lambda e: refresh())
-    history_list = ft.ListView(expand=True, spacing=4)
+    history_col = ft.Column(spacing=4)
     history_bar, history_month_label = month_bar()
-    history_view = ft.Column(
-        [heading("History"), f_search,
-         ft.Row([f_category, f_kind, f_wallet], wrap=True, spacing=8),
-         ft.Row([history_bar, f_all_months], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True),
-         history_list],
-        expand=True,
+    history_section = ft.Column(
+        [
+            heading("History"), f_search,
+            ft.ExpansionTile(title=ft.Text("Filters"), dense=True, controls_padding=8,
+                             controls=[ft.Row([f_category, f_kind, f_wallet], wrap=True, spacing=8)]),
+            ft.Row([history_bar, f_all_months], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True),
+            history_col,
+        ],
+        spacing=8,
     )
+    home_view = ft.Column([add_section, ft.Divider(height=32), history_section],
+                          scroll=ft.ScrollMode.AUTO, spacing=8)
 
     def history_rows():
         rows = db.list_transactions(
@@ -262,7 +283,7 @@ def main(page: ft.Page):
     summary_view = ft.Column(
         [
             heading("Summary"), summary_bar, balance_card,
-            card(label("WALLETS (ALL TIME)"), wallet_list),
+            card(label("ACCOUNTS (ALL TIME)"), wallet_list),
             card(label("BUDGETS"), budget_list),
             card(label("SPENDING BY CATEGORY"), ft.Container(content=pie, height=240), category_list),
         ],
@@ -274,18 +295,23 @@ def main(page: ft.Page):
         for month_label in month_labels:
             month_label.value = month
         history_month_label.value = "All months" if f_all_months.value else month
-        history_list.controls = history_rows()
+        history_col.controls = history_rows()
 
         income, expense = db.month_totals(month)
         balance_text.value = sv.money(income - expense)
         income_text.value = sv.money(income)
         expense_text.value = sv.money(expense)
 
-        wallet_list.controls = [ft.Text(f"{name}: {sv.money(bal)}") for name, bal in db.wallet_balances().items()]
+        wallet_list.controls = [
+            ft.Row([ft.Icon(WALLET_ICONS[name], size=20), ft.Text(f"{name}: {sv.money(bal)}")], spacing=8)
+            for name, bal in db.wallet_balances().items()
+        ]
 
         by_category = db.expense_by_category(month)
         category_list.controls = [
-            ft.Text(f"{r['category']}: {sv.money(r['total'])}") for r in by_category
+            ft.Row([ft.Icon(CATEGORY_ICONS.get(r["category"], ft.Icons.MORE_HORIZ), size=20),
+                    ft.Text(f"{r['category']}: {sv.money(r['total'])}")], spacing=8)
+            for r in by_category
         ] or [ft.Text("No expenses this month.")]
         pie.sections = [
             ft.PieChartSection(
@@ -312,7 +338,7 @@ def main(page: ft.Page):
 
     # ================= BUDGETS (dropdown) =================
     budget_categories = [c for c in db.CATEGORIES if c != "Salary"]
-    budget_cat = dropdown("Category", budget_categories[0], budget_categories)
+    budget_cat = dropdown("Category", budget_categories[0], icon_options(budget_categories, CATEGORY_ICONS))
     budget_amount = field(label="Monthly limit", prefix_text=prefix(), text_size=24,
                           keyboard_type=ft.KeyboardType.NUMBER)
     budget_info = ft.Text()
@@ -357,7 +383,7 @@ def main(page: ft.Page):
         scroll=ft.ScrollMode.AUTO, spacing=16,
     )
 
-    # ================= SETTINGS =================
+    # ================= SETTINGS (text boxes save by themselves) =================
     def toggle_dark(e):
         page.theme_mode = ft.ThemeMode.DARK if e.control.value else ft.ThemeMode.LIGHT
         db.set_setting("dark_mode", "1" if e.control.value else "0")
@@ -382,62 +408,35 @@ def main(page: ft.Page):
         build_swatches()
         page.update()
 
-    app_name_field = field(label="App name (shown at the top)", value=page.title)
-
     def save_app_name(e):
         name = (app_name_field.value or "").strip() or "WhereMyMoney"
+        app_name_field.value = name
+        if name == db.get_setting("app_name", "WhereMyMoney"):
+            page.update()
+            return  # nothing changed (Enter and tapping away both call this)
         db.set_setting("app_name", name)
         app_title.value = name
         page.title = name
         page.update()
         toast("Name saved")
 
-    currency_field = field(label="Currency symbol (e.g. RM, $, S$)", value=sv.CURRENCY)
-
     def save_currency(e):
-        sv.CURRENCY = (currency_field.value or "").strip() or "RM"
-        db.set_setting("currency", sv.CURRENCY)
+        symbol = (currency_field.value or "").strip() or "RM"
+        currency_field.value = symbol
+        if symbol == sv.CURRENCY:
+            page.update()
+            return
+        sv.CURRENCY = symbol
+        db.set_setting("currency", symbol)
         for f in (amount, budget_amount):
             f.prefix_text = prefix()
         refresh()
         toast("Currency saved")
 
-    # ---- wallets ----
-    wallet_col = ft.Column(spacing=0)
-    new_wallet = field(label="New wallet name (e.g. Bank, E-wallet)")
-
-    def refresh_wallet_controls():
-        names = db.list_wallets()
-        wallet_dd.options = [ft.dropdown.Option(n) for n in names]
-        if wallet_dd.value not in names:
-            wallet_dd.value = names[0]
-        f_wallet.options = [ft.dropdown.Option(n) for n in [ALL] + names]
-        if f_wallet.value not in [ALL] + names:
-            f_wallet.value = ALL
-        wallet_col.controls = [
-            ft.ListTile(title=ft.Text(n), dense=True, leading=ft.Icon(ft.Icons.ACCOUNT_BALANCE_WALLET_OUTLINED),
-                        trailing=ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, n=n: remove_wallet(n)))
-            for n in names
-        ]
-
-    def add_wallet(e):
-        try:
-            db.add_wallet(new_wallet.value)
-        except ValueError as problem:
-            toast(str(problem))
-            return
-        new_wallet.value = ""
-        refresh_wallet_controls()
-        refresh()
-
-    def remove_wallet(name):
-        try:
-            db.delete_wallet(name)
-        except ValueError as problem:
-            toast(str(problem))
-            return
-        refresh_wallet_controls()
-        refresh()
+    app_name_field = field(label="App name (shown at the top)", value=page.title,
+                           on_submit=save_app_name, on_blur=save_app_name)
+    currency_field = field(label="Currency symbol (e.g. RM, $, S$)", value=sv.CURRENCY,
+                           on_submit=save_currency, on_blur=save_currency)
 
     # ---- recurring ----
     recurring_col = ft.Column(spacing=0)
@@ -459,11 +458,9 @@ def main(page: ft.Page):
 
     def open_recurring(e):
         amt = field(label="Amount", prefix_text=prefix(), keyboard_type=ft.KeyboardType.NUMBER)
-        kind_dd = ft.Dropdown(label="Type", value="expense", filled=True, border_radius=12, border_width=0,
-                              options=[ft.dropdown.Option(key="expense", text="Expense"),
-                                       ft.dropdown.Option(key="income", text="Income")])
-        cat = dropdown("Category", db.CATEGORIES[0], db.CATEGORIES)
-        wal = dropdown("Wallet", db.list_wallets()[0], db.list_wallets())
+        kind_dd = dropdown("Type", "expense", kind_options())
+        cat = dropdown("Category", db.CATEGORIES[0], icon_options(db.CATEGORIES, CATEGORY_ICONS))
+        wal = dropdown("Account", db.WALLETS[-1], icon_options(db.WALLETS, WALLET_ICONS))
         day = field(label="Day of month (1-31)", value=sv.today()[8:10].lstrip("0") or "1",
                     keyboard_type=ft.KeyboardType.NUMBER)
         nt = field(label="Note (e.g. Rent, Netflix)")
@@ -494,75 +491,170 @@ def main(page: ft.Page):
         )
         page.open(dialog)
 
-    # ---- export ----
-    def on_export_result(e: ft.FilePickerResultEvent):
+    # ---- export / import (backup, to move your data to a new device) ----
+    def backup_text():
+        return sv.dump_backup(db.export_data())
+
+    def on_save_result(e: ft.FilePickerResultEvent):
         if not e.path:
             return
         try:
-            with open(e.path, "w", encoding="utf-8", newline="") as f:
-                f.write(sv.build_csv(db.all_transactions()))
-            toast("Exported")
+            with open(e.path, "w", encoding="utf-8") as f:
+                f.write(backup_text())
+            toast("Backup saved")
         except OSError as problem:
             toast(f"Could not save the file: {problem}")
 
-    exporter = ft.FilePicker(on_result=on_export_result)
-    page.overlay.append(exporter)
+    def on_pick_result(e: ft.FilePickerResultEvent):
+        if not e.files:
+            return
+        if not e.files[0].path:
+            toast("Can't read that file here. Use 'Paste text' instead.")
+            return
+        try:
+            with open(e.files[0].path, encoding="utf-8") as f:
+                text = f.read()
+        except (OSError, UnicodeDecodeError) as problem:
+            toast(f"Could not read the file: {problem}")
+            return
+        start_import(text)
 
-    def export_file(e):
-        exporter.save_file(file_name="wheremymoney.csv", allowed_extensions=["csv"])
+    saver = ft.FilePicker(on_result=on_save_result)
+    opener = ft.FilePicker(on_result=on_pick_result)
+    page.overlay.extend([saver, opener])
 
-    def copy_csv(e):
-        page.set_clipboard(sv.build_csv(db.all_transactions()))
-        toast("CSV copied to clipboard")
+    def apply_settings():
+        """Re-reads every setting from the database (used after an import)."""
+        sv.CURRENCY = db.get_setting("currency", "RM")
+        accent["value"] = db.get_setting("accent", ACCENTS["Teal"])
+        dark = db.get_setting("dark_mode", "0") == "1"
+        page.theme_mode = ft.ThemeMode.DARK if dark else ft.ThemeMode.LIGHT
+        dark_switch.value = dark
+        apply_theme()
+        build_swatches()
+        name = db.get_setting("app_name", "WhereMyMoney")
+        page.title = app_title.value = app_name_field.value = name
+        currency_field.value = sv.CURRENCY
+        for f in (amount, budget_amount):
+            f.prefix_text = prefix()
+        refresh_recurring()
+        load_budget()
+        refresh()
 
+    def start_import(text):
+        try:
+            data = sv.load_backup(text)
+            db.validate_backup(data)
+        except ValueError as problem:
+            toast(str(problem))
+            return
+
+        def do_import():
+            db.import_data(data)
+            apply_settings()
+            toast(f"Imported {len(data['transactions'])} transactions")
+
+        confirm("Replace all data?",
+                f"This replaces everything in the app with the backup "
+                f"({len(data['transactions'])} transactions). It can't be undone.",
+                do_import, yes_label="Replace")
+
+    def open_export(e):
+        def save_file(ev):
+            page.close(dialog)
+            saver.save_file(file_name=f"wheremymoney-backup-{sv.today()}.json", allowed_extensions=["json"])
+
+        def copy_text(ev):
+            page.close(dialog)
+            page.set_clipboard(backup_text())
+            toast("Backup copied. Paste it into a note or message to yourself.")
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Export data"),
+            content=ft.Text("Creates a backup of everything: transactions, budgets, recurring entries "
+                            "and settings. Save it as a file, or copy it as text."),
+            actions=[ft.TextButton("Cancel", on_click=lambda ev: page.close(dialog)),
+                     ft.OutlinedButton("Copy as text", on_click=copy_text),
+                     ft.FilledButton("Save file", on_click=save_file)],
+        )
+        page.open(dialog)
+
+    def open_paste():
+        box = field(label="Paste backup text here", multiline=True, min_lines=4, max_lines=8)
+
+        def go(ev):
+            page.close(dialog)
+            start_import(box.value)
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Paste backup"), content=ft.Container(box, width=320),
+            actions=[ft.TextButton("Cancel", on_click=lambda ev: page.close(dialog)),
+                     ft.FilledButton("Import", on_click=go)],
+        )
+        page.open(dialog)
+
+    def open_import(e):
+        def choose_file(ev):
+            page.close(dialog)
+            opener.pick_files(dialog_title="Choose backup file", allowed_extensions=["json"])
+
+        def paste_text(ev):
+            page.close(dialog)
+            open_paste()
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Import data"),
+            content=ft.Text("Choose a backup file made with Export data, or paste the backup text. "
+                            "Importing replaces all data currently in the app."),
+            actions=[ft.TextButton("Cancel", on_click=lambda ev: page.close(dialog)),
+                     ft.OutlinedButton("Paste text", on_click=paste_text),
+                     ft.FilledButton("Choose file", on_click=choose_file)],
+        )
+        page.open(dialog)
+
+    dark_switch = ft.Switch(label="Dark mode", value=page.theme_mode == ft.ThemeMode.DARK, on_change=toggle_dark)
     build_swatches()
-    refresh_wallet_controls()
     refresh_recurring()
     settings_view = ft.Column(
         [
             heading("Settings"),
+            ft.Text("Text boxes save automatically when you press Enter or tap away.", size=12),
             card(label("APPEARANCE"),
-                 ft.Switch(label="Dark mode", value=page.theme_mode == ft.ThemeMode.DARK, on_change=toggle_dark),
-                 ft.Text("Accent colour"), swatches),
+                 dark_switch, ft.Text("Accent colour"), swatches),
             card(label("APP NAME"), app_name_field,
-                 ft.FilledTonalButton("Save name", icon=ft.Icons.CHECK, on_click=save_app_name),
                  ft.Text("The name and icon under the app on your phone's home screen are set when the "
                          "APK is built. See README.md.", size=12)),
-            card(label("CURRENCY"), currency_field,
-                 ft.FilledTonalButton("Save currency", icon=ft.Icons.CHECK, on_click=save_currency)),
-            card(label("WALLETS"), wallet_col, new_wallet,
-                 ft.FilledTonalButton("Add wallet", icon=ft.Icons.ADD, on_click=add_wallet)),
+            card(label("CURRENCY"), currency_field),
             card(label("RECURRING (RENT, SUBSCRIPTIONS, SALARY)"), recurring_col,
                  ft.FilledTonalButton("Add recurring entry", icon=ft.Icons.ADD, on_click=open_recurring)),
-            card(label("DATA"),
-                 ft.FilledTonalButton("Export all to CSV file", icon=ft.Icons.FILE_DOWNLOAD, on_click=export_file),
-                 ft.OutlinedButton("Copy CSV to clipboard", icon=ft.Icons.CONTENT_COPY, on_click=copy_csv)),
+            card(label("DATA (MOVE TO A NEW DEVICE)"),
+                 ft.FilledTonalButton("Export data", icon=ft.Icons.FILE_UPLOAD, on_click=open_export),
+                 ft.FilledTonalButton("Import data", icon=ft.Icons.FILE_DOWNLOAD, on_click=open_import)),
             card(label("QUICK ADD (COMING LATER)"),
                  ft.Switch(label="Notification shortcut", value=False, disabled=True),
                  ft.Switch(label="Floating bubble", value=False, disabled=True),
                  ft.Text("These need native Android code and will be added in a later stage.", size=12)),
-            ft.Text("WhereMyMoney v0.3", size=12, text_align=ft.TextAlign.CENTER),
+            ft.Text("WhereMyMoney v0.5", size=12, text_align=ft.TextAlign.CENTER),
         ],
         scroll=ft.ScrollMode.AUTO, spacing=12,
     )
 
     # ================= NAVIGATION =================
-    views = [add_view, history_view, summary_view, budgets_view, settings_view]
-    body = ft.Container(content=add_view, expand=True, padding=16)
+    views = [home_view, summary_view, budgets_view, settings_view]
+    body = ft.Container(content=home_view, expand=True, padding=16)
 
     def on_nav(e):
         index = e.control.selected_index
         body.content = views[index]
         db.apply_recurring(sv.today())
-        if index == 3:
+        if index == 2:
             load_budget()
         refresh()
 
     page.navigation_bar = ft.NavigationBar(
         selected_index=0, on_change=on_nav,
         destinations=[
-            ft.NavigationBarDestination(icon=ft.Icons.ADD_CIRCLE_OUTLINE, label="Add"),
-            ft.NavigationBarDestination(icon=ft.Icons.LIST_ALT, label="History"),
+            ft.NavigationBarDestination(icon=ft.Icons.HOME_OUTLINED, label="Home"),
             ft.NavigationBarDestination(icon=ft.Icons.PIE_CHART_OUTLINE, label="Summary"),
             ft.NavigationBarDestination(icon=ft.Icons.SAVINGS_OUTLINED, label="Budgets"),
             ft.NavigationBarDestination(icon=ft.Icons.SETTINGS_OUTLINED, label="Settings"),

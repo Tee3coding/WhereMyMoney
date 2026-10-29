@@ -18,3 +18,15 @@ These are fixed when the APK is built:
 Then run `flet build apk` (check flet.dev/docs for current build steps).
 
 The in-app name (top bar) can be changed any time in Settings.
+
+## Moving to a new phone
+Settings > Data > **Export data** (save the file or copy the text), send it to the new phone, then
+Settings > Data > **Import data** there. Importing replaces everything in the app with the backup.
+
+## Build the Android APK
+1. Install Android Studio (gives you the Android SDK) and a JDK 17.
+2. In the project folder (virtual environment active): `flet build apk`
+3. The APK appears in `build/apk/`. Copy it to your phone and open it
+   (allow "install unknown apps" for your file manager or browser when asked).
+4. Your icon is `src/assets/icon.png` (replace with your own square PNG, 1024x1024).
+   Your home screen name is `product` in `pyproject.toml`.

@@ -10,7 +10,7 @@ CATEGORIES = [
     "Food", "Transport", "Bills", "Shopping",
     "Health", "Entertainment", "Salary", "Other",
 ]
-DEFAULT_WALLET = "Cash"
+WALLETS = ["Bank", "Wallet"]  # fixed choices: where the money is
 
 
 def _db_path() -> str:
@@ -43,21 +43,19 @@ def init_db() -> None:
                 category     TEXT    NOT NULL,
                 date         TEXT    NOT NULL,
                 note         TEXT    NOT NULL DEFAULT '',
-                wallet       TEXT    NOT NULL DEFAULT 'Cash'
+                wallet       TEXT    NOT NULL DEFAULT 'Wallet'
             )
             """
         )
         # Upgrade databases created by earlier versions (no wallet column yet).
         columns = [r["name"] for r in conn.execute("PRAGMA table_info(transactions)")]
         if "wallet" not in columns:
-            conn.execute("ALTER TABLE transactions ADD COLUMN wallet TEXT NOT NULL DEFAULT 'Cash'")
+            conn.execute("ALTER TABLE transactions ADD COLUMN wallet TEXT NOT NULL DEFAULT 'Wallet'")
         conn.execute(
             "CREATE TABLE IF NOT EXISTS budgets ("
             "category TEXT PRIMARY KEY, limit_cents INTEGER NOT NULL CHECK (limit_cents > 0))"
         )
         conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-        conn.execute("CREATE TABLE IF NOT EXISTS wallets (name TEXT PRIMARY KEY)")
-        conn.execute("INSERT OR IGNORE INTO wallets (name) VALUES (?)", (DEFAULT_WALLET,))
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS recurring (
@@ -73,6 +71,9 @@ def init_db() -> None:
             )
             """
         )
+        # Older versions allowed custom wallets (e.g. "Cash"): fold them into "Wallet".
+        for table in ("transactions", "recurring"):
+            conn.execute(f"UPDATE {table} SET wallet = 'Wallet' WHERE wallet NOT IN ('Bank', 'Wallet')")
 
 
 # ---------- transactions ----------
@@ -116,9 +117,6 @@ def list_transactions(month=None, search="", category="", kind="", wallet=""):
         return conn.execute(sql, params).fetchall()
 
 
-def all_transactions():
-    with _db() as conn:
-        return conn.execute("SELECT * FROM transactions ORDER BY date, id").fetchall()
 
 
 def month_totals(month: str) -> tuple[int, int]:
@@ -179,38 +177,11 @@ def set_setting(key: str, value: str) -> None:
         )
 
 
-# ---------- wallets ----------
-def list_wallets() -> list[str]:
-    with _db() as conn:
-        return [r["name"] for r in conn.execute("SELECT name FROM wallets ORDER BY rowid")]
-
-
-def add_wallet(name: str) -> None:
-    name = (name or "").strip()
-    if not name:
-        raise ValueError("Wallet name can't be empty")
-    try:
-        with _db() as conn:
-            conn.execute("INSERT INTO wallets (name) VALUES (?)", (name,))
-    except sqlite3.IntegrityError:
-        raise ValueError("That wallet already exists")
-
-
-def delete_wallet(name: str) -> None:
-    with _db() as conn:
-        used = conn.execute("SELECT COUNT(*) FROM transactions WHERE wallet = ?", (name,)).fetchone()[0]
-        used += conn.execute("SELECT COUNT(*) FROM recurring WHERE wallet = ?", (name,)).fetchone()[0]
-        if used:
-            raise ValueError(f"'{name}' is still used by transactions or recurring entries")
-        if conn.execute("SELECT COUNT(*) FROM wallets").fetchone()[0] <= 1:
-            raise ValueError("You need at least one wallet")
-        conn.execute("DELETE FROM wallets WHERE name = ?", (name,))
-
-
+# ---------- wallets (fixed: Bank / Wallet) ----------
 def wallet_balances() -> dict[str, int]:
     """All-time balance per wallet (income minus expenses), in cents."""
+    balances = {w: 0 for w in WALLETS}
     with _db() as conn:
-        balances = {r["name"]: 0 for r in conn.execute("SELECT name FROM wallets ORDER BY rowid")}
         for r in conn.execute(
             "SELECT wallet, SUM(CASE WHEN type='income' THEN amount_cents ELSE -amount_cents END) AS bal "
             "FROM transactions GROUP BY wallet"
@@ -261,3 +232,67 @@ def apply_recurring(today: str) -> int:
                 created += 1
                 month = sv.shift_month(month, 1)
     return created
+
+
+# ---------- backup: move your data to a new device ----------
+def export_data() -> dict:
+    with _db() as conn:
+        transactions = [dict(r) for r in conn.execute(
+            "SELECT amount_cents, type, category, wallet, date, note FROM transactions ORDER BY date, id")]
+        recurring = [dict(r) for r in conn.execute(
+            "SELECT amount_cents, type, category, wallet, note, day, start_month, last_applied "
+            "FROM recurring ORDER BY id")]
+        settings = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM settings")}
+    return {"app": "WhereMyMoney", "version": 1, "transactions": transactions,
+            "recurring": recurring, "budgets": get_budgets(), "settings": settings}
+
+
+def _money_ok(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def validate_backup(data) -> None:
+    """Raises ValueError (friendly message) if the backup can't be imported safely."""
+    if not isinstance(data, dict) or data.get("app") != "WhereMyMoney":
+        raise ValueError("This doesn't look like a WhereMyMoney backup")
+    for key in ("transactions", "recurring", "budgets", "settings"):
+        if key not in data:
+            raise ValueError(f"The backup is missing its '{key}' section")
+    try:
+        for t in data["transactions"]:
+            sv.parse_date(t["date"])
+            if not (_money_ok(t["amount_cents"]) and t["type"] in ("income", "expense")
+                    and isinstance(t["category"], str) and isinstance(t["note"], str)):
+                raise ValueError
+        for r in data["recurring"]:
+            if not (_money_ok(r["amount_cents"]) and r["type"] in ("income", "expense")
+                    and isinstance(r["category"], str) and isinstance(r["note"], str)
+                    and isinstance(r["day"], int) and 1 <= r["day"] <= 31
+                    and isinstance(r["start_month"], str) and isinstance(r["last_applied"], str)):
+                raise ValueError
+        if not all(isinstance(k, str) and _money_ok(v) for k, v in data["budgets"].items()):
+            raise ValueError
+        if not all(isinstance(k, str) and isinstance(v, str) for k, v in data["settings"].items()):
+            raise ValueError
+    except (KeyError, TypeError, ValueError, AttributeError):
+        raise ValueError("The backup file is damaged or in an unknown format")
+
+
+def import_data(data: dict) -> None:
+    """Replaces ALL current data with the backup. Nothing changes if the backup is invalid."""
+    validate_backup(data)
+    fix = lambda w: w if w in WALLETS else "Wallet"
+    with _db() as conn:
+        for table in ("transactions", "recurring", "budgets", "settings"):
+            conn.execute(f"DELETE FROM {table}")
+        conn.executemany(
+            "INSERT INTO transactions (amount_cents, type, category, wallet, date, note) VALUES (?, ?, ?, ?, ?, ?)",
+            [(t["amount_cents"], t["type"], t["category"], fix(t.get("wallet")), t["date"], t["note"])
+             for t in data["transactions"]])
+        conn.executemany(
+            "INSERT INTO recurring (amount_cents, type, category, wallet, note, day, start_month, last_applied) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [(r["amount_cents"], r["type"], r["category"], fix(r.get("wallet")), r["note"], r["day"],
+              r["start_month"], r["last_applied"]) for r in data["recurring"]])
+        conn.executemany("INSERT INTO budgets (category, limit_cents) VALUES (?, ?)", list(data["budgets"].items()))
+        conn.executemany("INSERT INTO settings (key, value) VALUES (?, ?)", list(data["settings"].items()))

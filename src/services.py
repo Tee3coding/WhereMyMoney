@@ -51,15 +51,16 @@ def parse_day(text: str) -> int:
     return day
 
 
-def build_csv(rows) -> str:
-    """Turns transaction rows into CSV text (for export)."""
-    import csv
-    import io
+def dump_backup(data: dict) -> str:
+    """Backup dictionary -> JSON text."""
+    import json
+    return json.dumps(data, indent=2, ensure_ascii=False)
 
-    out = io.StringIO()
-    writer = csv.writer(out)
-    writer.writerow(["date", "type", "category", "wallet", "amount", "note"])
-    for r in rows:
-        writer.writerow([r["date"], r["type"], r["category"], r["wallet"],
-                         f"{r['amount_cents'] / 100:.2f}", r["note"]])
-    return out.getvalue()
+
+def load_backup(text: str) -> dict:
+    """JSON text -> backup dictionary. Raises ValueError with a friendly message."""
+    import json
+    try:
+        return json.loads((text or "").strip())
+    except ValueError:
+        raise ValueError("That isn't a valid backup (the text is incomplete or damaged)")
