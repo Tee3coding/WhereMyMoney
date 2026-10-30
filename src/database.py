@@ -131,14 +131,40 @@ def month_totals(month: str) -> tuple[int, int]:
     return totals.get("income", 0), totals.get("expense", 0)
 
 
-def expense_by_category(month: str):
+def _month_filter(month, kind, wallet):
+    sql, params = "WHERE type = ? AND substr(date, 1, 7) = ?", [kind, month]
+    if wallet:
+        sql += " AND wallet = ?"
+        params.append(wallet)
+    return sql, params
+
+
+def category_totals(month: str, kind: str = "expense", wallet: str = ""):
+    """Total per category for the month, biggest first. kind is 'expense' or 'income'."""
+    where, params = _month_filter(month, kind, wallet)
     with _db() as conn:
         return conn.execute(
-            "SELECT category, SUM(amount_cents) AS total FROM transactions "
-            "WHERE type = 'expense' AND substr(date, 1, 7) = ? "
-            "GROUP BY category ORDER BY total DESC",
-            (month,),
-        ).fetchall()
+            f"SELECT category, SUM(amount_cents) AS total FROM transactions {where} "
+            "GROUP BY category ORDER BY total DESC", params).fetchall()
+
+
+def daily_totals(month: str, kind: str = "expense", wallet: str = "") -> dict[int, int]:
+    """{day of month: total cents} for the line chart."""
+    where, params = _month_filter(month, kind, wallet)
+    with _db() as conn:
+        rows = conn.execute(
+            f"SELECT CAST(substr(date, 9, 2) AS INTEGER) AS day, SUM(amount_cents) AS total "
+            f"FROM transactions {where} GROUP BY day", params).fetchall()
+    return {r["day"]: r["total"] for r in rows}
+
+
+def top_transactions(month: str, kind: str = "expense", wallet: str = "", limit: int = 10):
+    """The biggest records of the month."""
+    where, params = _month_filter(month, kind, wallet)
+    with _db() as conn:
+        return conn.execute(
+            f"SELECT * FROM transactions {where} ORDER BY amount_cents DESC, id DESC LIMIT ?",
+            params + [limit]).fetchall()
 
 
 # ---------- budgets ----------

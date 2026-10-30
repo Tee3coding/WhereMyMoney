@@ -5,12 +5,18 @@ from decimal import Decimal, InvalidOperation
 CURRENCY = "RM"
 
 
-def parse_amount(text: str) -> int:
-    """'12.50' -> 1250 (cents). Raises ValueError with a friendly message."""
-    try:
-        value = Decimal((text or "").replace(",", "").strip())
-    except InvalidOperation:
+def calc(expr: str) -> Decimal:
+    """Evaluates simple sums typed on the keypad, e.g. '21+35' or '12.5-2'."""
+    import re
+    expr = (expr or "").replace(",", "").replace(" ", "")
+    if not re.fullmatch(r"[+-]?\d*\.?\d+(?:[+-]\d*\.?\d+)*", expr):
         raise ValueError("Please enter a valid amount, e.g. 12.50")
+    return sum((Decimal(t) for t in re.findall(r"[+-]?\d*\.?\d+", expr)), Decimal(0))
+
+
+def parse_amount(text: str) -> int:
+    """'12.50' or '10+2.5' -> cents. Raises ValueError with a friendly message."""
+    value = calc(text)
     if value <= 0:
         raise ValueError("Amount must be greater than 0")
     return int((value * 100).to_integral_value())
