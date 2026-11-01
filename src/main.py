@@ -152,7 +152,11 @@ def main(page: ft.Page):
             "wallet": t["wallet"] if t else "Wallet", "date": t["date"] if t else sv.today(),
             "text": f"{t['amount_cents'] / 100:.2f}".rstrip("0").rstrip(".") if t else "",
         }
-        display = ft.Text(size=34, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.RIGHT)
+        display = field(  # type here with the phone keyboard, or use the keypad below (both stay in sync)
+            prefix_text=prefix(), hint_text="0", text_size=34, text_align=ft.TextAlign.RIGHT,
+            text_style=ft.TextStyle(weight=ft.FontWeight.BOLD), keyboard_type=ft.KeyboardType.NUMBER,
+            input_filter=ft.InputFilter(allow=True, regex_string=r"[0-9.+\-]", replacement_string=""),
+            on_change=lambda e: form.update({"text": e.control.value or ""}))
         date_label = ft.Text(size=13)
         memo = field(label="Memo", value=t["note"] if t else "", prefix_icon=ft.Icons.EDIT_NOTE)
         error = ft.Text(color=ft.Colors.RED)
@@ -163,7 +167,7 @@ def main(page: ft.Page):
             show()
 
         def show():
-            display.value = f"{sv.CURRENCY} {form['text'] or '0'}"
+            display.value = form["text"]
             date_label.value = "Today" if form["date"] == sv.today() else form["date"][5:]
             grid.controls = [
                 ft.Container(
@@ -430,6 +434,7 @@ def main(page: ft.Page):
         dark = db.get_setting("dark_mode", "1") == "1"
         page.theme_mode = ft.ThemeMode.DARK if dark else ft.ThemeMode.LIGHT
         dark_switch.value = dark
+        open_add_switch.value = db.get_setting("open_add", "0") == "1"
         apply_theme()
         name = db.get_setting("app_name", "WhereMyMoney")
         page.title = app_title.value = app_name_field.value = name
@@ -653,7 +658,9 @@ def main(page: ft.Page):
                            ft.Text(f"{t['wallet']}  {t['note']}".strip(), size=12, color=ft.Colors.OUTLINE)],
                           spacing=0, expand=True),
                 ft.Text(f"{'+' if income else '-'}{sv.money(t['amount_cents'])}", size=16,
-                        color=ft.Colors.GREEN if income else None)],
+                        color=ft.Colors.GREEN if income else None),
+                ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_size=20, tooltip="Edit",
+                              on_click=lambda e, t=t: open_entry(t))],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
             padding=ft.padding.symmetric(horizontal=12, vertical=10), ink=True,
             on_click=lambda e, t=t: open_entry(t))
@@ -825,6 +832,9 @@ def main(page: ft.Page):
 
     # ================= MINE =================
     m_exp, m_inc, m_count = amount_text(), amount_text(), amount_text()
+    open_add_switch = ft.Switch(
+        label="Open on the Add screen at launch", value=db.get_setting("open_add", "0") == "1",
+        on_change=lambda e: db.set_setting("open_add", "1" if e.control.value else "0"))
 
     def edit_name(e):
         box = field(label="Name", value=app_title.value)
@@ -868,7 +878,10 @@ def main(page: ft.Page):
          tile_grid(tile(ft.Icons.PALETTE, "#E86AA6", "Appearance", lambda e: open_subpage("Appearance", card(dark_switch))),
                    tile(ft.Icons.MONETIZATION_ON, "#E8A33D", "Preferences",
                         lambda e: open_subpage("Preferences", card(label("NAME"), app_name_field),
-                                               card(label("CURRENCY"), currency_field))),
+                                               card(label("CURRENCY"), currency_field),
+                                               card(label("LAUNCH"), open_add_switch,
+                                                    ft.Text("Opens the new-record panel straight away, so one tap "
+                                                            "on the app icon is enough to add a record.", size=12)))),
                    tile(ft.Icons.FOLDER_OPEN, "#5AA9E6", "Export Data", open_export),
                    tile(ft.Icons.DOWNLOAD, "#4FB477", "Import Data", open_import)),
          ft.Container(height=100)],
@@ -992,6 +1005,8 @@ def main(page: ft.Page):
     page.add(ft.SafeArea(body, expand=True))
     refresh_recurring()
     show_tab(0)
+    if open_add_switch.value:
+        open_entry()
 
 
 ft.app(target=main)
