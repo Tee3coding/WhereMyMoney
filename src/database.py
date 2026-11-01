@@ -6,10 +6,13 @@ from contextlib import contextmanager
 
 import services as sv
 
-CATEGORIES = [
-    "Food", "Transport", "Bills", "Shopping",
-    "Health", "Entertainment", "Salary", "Other",
+# (name, icon key, colour). Icon keys are mapped to real icons in main.py.
+DEFAULT_CATEGORIES = [
+    ("Food", "restaurant", "#FFD8A8"), ("Transport", "bus", "#B8E0F6"), ("Bills", "receipt", "#D9C8F5"),
+    ("Shopping", "shopping", "#C8EBC6"), ("Health", "health", "#FFC9D6"), ("Entertainment", "movie", "#F8D5F0"),
+    ("Salary", "salary", "#FFE9A0"), ("Other", "more", "#E2E2E2"),
 ]
+CATEGORIES = [c[0] for c in DEFAULT_CATEGORIES]  # live list: kept in sync with the categories table
 WALLETS = ["Bank", "Wallet"]  # fixed choices: where the money is
 
 
@@ -74,6 +77,78 @@ def init_db() -> None:
         # Older versions allowed custom wallets (e.g. "Cash"): fold them into "Wallet".
         for table in ("transactions", "recurring"):
             conn.execute(f"UPDATE {table} SET wallet = 'Wallet' WHERE wallet NOT IN ('Bank', 'Wallet')")
+        conn.execute("CREATE TABLE IF NOT EXISTS categories ("
+                     "name TEXT PRIMARY KEY, icon TEXT NOT NULL, color TEXT NOT NULL, position INTEGER NOT NULL)")
+        if not conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0]:
+            conn.executemany("INSERT INTO categories (name, icon, color, position) VALUES (?, ?, ?, ?)",
+                             [(n, i, c, pos) for pos, (n, i, c) in enumerate(DEFAULT_CATEGORIES)])
+        _ensure_used_categories(conn)
+        _sync_categories(conn)
+
+
+# ---------- categories ----------
+def _sync_categories(conn) -> None:
+    CATEGORIES[:] = [r["name"] for r in conn.execute("SELECT name FROM categories ORDER BY position, rowid")]
+
+
+def _ensure_used_categories(conn) -> None:
+    """Any category name used by a record, recurring entry or budget must exist."""
+    used = conn.execute("SELECT category FROM transactions UNION SELECT category FROM recurring "
+                        "UNION SELECT category FROM budgets").fetchall()
+    known = {r["name"] for r in conn.execute("SELECT name FROM categories")}
+    pos = conn.execute("SELECT COALESCE(MAX(position), -1) FROM categories").fetchone()[0]
+    for r in used:
+        if r["category"] not in known:
+            pos += 1
+            conn.execute("INSERT INTO categories (name, icon, color, position) VALUES (?, 'more', '#E2E2E2', ?)",
+                         (r["category"], pos))
+
+
+def list_categories():
+    with _db() as conn:
+        return conn.execute("SELECT name, icon, color FROM categories ORDER BY position, rowid").fetchall()
+
+
+def _check_name(conn, name: str, old: str = "") -> str:
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Category name can't be empty")
+    if conn.execute("SELECT 1 FROM categories WHERE lower(name) = lower(?) AND name != ?", (name, old)).fetchone():
+        raise ValueError("That category already exists")
+    return name
+
+
+def add_category(name: str, icon: str, color: str) -> None:
+    with _db() as conn:
+        name = _check_name(conn, name)
+        pos = conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM categories").fetchone()[0]
+        conn.execute("INSERT INTO categories (name, icon, color, position) VALUES (?, ?, ?, ?)",
+                     (name, icon, color, pos))
+        _sync_categories(conn)
+
+
+def update_category(old: str, name: str, icon: str, color: str) -> None:
+    """Renaming also updates every record, recurring entry and budget that used the old name."""
+    with _db() as conn:
+        name = _check_name(conn, name, old)
+        conn.execute("UPDATE categories SET name = ?, icon = ?, color = ? WHERE name = ?", (name, icon, color, old))
+        if name != old:
+            for table in ("transactions", "recurring", "budgets"):
+                conn.execute(f"UPDATE {table} SET category = ? WHERE category = ?", (name, old))
+        _sync_categories(conn)
+
+
+def delete_category(name: str) -> None:
+    with _db() as conn:
+        used = conn.execute("SELECT (SELECT COUNT(*) FROM transactions WHERE category = ?) + "
+                            "(SELECT COUNT(*) FROM recurring WHERE category = ?)", (name, name)).fetchone()[0]
+        if used:
+            raise ValueError(f"'{name}' is used by {used} record(s). Change or delete those first.")
+        if conn.execute("SELECT COUNT(*) FROM categories").fetchone()[0] <= 1:
+            raise ValueError("You need at least one category")
+        conn.execute("DELETE FROM budgets WHERE category = ?", (name,))
+        conn.execute("DELETE FROM categories WHERE name = ?", (name,))
+        _sync_categories(conn)
 
 
 # ---------- transactions ----------
@@ -270,7 +345,8 @@ def export_data() -> dict:
             "FROM recurring ORDER BY id")]
         settings = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM settings")}
     return {"app": "WhereMyMoney", "version": 1, "transactions": transactions,
-            "recurring": recurring, "budgets": get_budgets(), "settings": settings}
+            "recurring": recurring, "budgets": get_budgets(), "settings": settings,
+            "categories": [dict(r) for r in list_categories()]}
 
 
 def _money_ok(value) -> bool:
@@ -300,6 +376,10 @@ def validate_backup(data) -> None:
             raise ValueError
         if not all(isinstance(k, str) and isinstance(v, str) for k, v in data["settings"].items()):
             raise ValueError
+        for c in data.get("categories", []):  # older backups have none
+            if not (isinstance(c["name"], str) and c["name"].strip() and isinstance(c["icon"], str)
+                    and isinstance(c["color"], str)):
+                raise ValueError
     except (KeyError, TypeError, ValueError, AttributeError):
         raise ValueError("The backup file is damaged or in an unknown format")
 
@@ -322,3 +402,9 @@ def import_data(data: dict) -> None:
               r["start_month"], r["last_applied"]) for r in data["recurring"]])
         conn.executemany("INSERT INTO budgets (category, limit_cents) VALUES (?, ?)", list(data["budgets"].items()))
         conn.executemany("INSERT INTO settings (key, value) VALUES (?, ?)", list(data["settings"].items()))
+        if "categories" in data:
+            conn.execute("DELETE FROM categories")
+            conn.executemany("INSERT OR IGNORE INTO categories (name, icon, color, position) VALUES (?, ?, ?, ?)",
+                             [(c["name"].strip(), c["icon"], c["color"], i) for i, c in enumerate(data["categories"])])
+        _ensure_used_categories(conn)
+        _sync_categories(conn)

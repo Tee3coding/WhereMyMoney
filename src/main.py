@@ -11,24 +11,36 @@ import services as sv
 
 YELLOW = "#FFD93B"
 BG_DARK, BG_LIGHT = "#000000", "#F2F2F7"
-# Change any icon here and it updates everywhere in the app.
-CATEGORY_ICONS = {
-    "Food": ft.Icons.RESTAURANT, "Transport": ft.Icons.DIRECTIONS_BUS,
-    "Bills": ft.Icons.RECEIPT_LONG, "Shopping": ft.Icons.SHOPPING_BAG,
-    "Health": ft.Icons.FAVORITE, "Entertainment": ft.Icons.MOVIE,
-    "Salary": ft.Icons.PAYMENTS, "Other": ft.Icons.MORE_HORIZ,
-    "All": ft.Icons.APPS,
+# Icons a category can use (the database stores the key on the left).
+I = ft.Icons
+ICON_CHOICES = {
+    "restaurant": I.RESTAURANT, "bus": I.DIRECTIONS_BUS, "receipt": I.RECEIPT_LONG, "shopping": I.SHOPPING_BAG,
+    "health": I.FAVORITE, "movie": I.MOVIE, "salary": I.PAYMENTS, "more": I.MORE_HORIZ, "coffee": I.LOCAL_CAFE,
+    "car": I.DIRECTIONS_CAR, "home": I.HOME, "phone": I.PHONE_ANDROID, "school": I.SCHOOL, "pets": I.PETS,
+    "flight": I.FLIGHT, "gift": I.CARD_GIFTCARD, "fitness": I.FITNESS_CENTER, "game": I.SPORTS_ESPORTS,
+    "savings": I.SAVINGS, "work": I.WORK, "child": I.CHILD_CARE, "beauty": I.FACE, "fuel": I.LOCAL_GAS_STATION,
+    "groceries": I.LOCAL_GROCERY_STORE,
 }
+COLOR_CHOICES = ["#FFD8A8", "#B8E0F6", "#D9C8F5", "#C8EBC6", "#FFC9D6", "#F8D5F0", "#FFE9A0", "#E2E2E2",
+                 "#BFE9E4", "#FFC4B0"]
+CATEGORY_ICONS = {"All": I.APPS}      # filled by load_categories()
+CATEGORY_COLORS = {"All": "#E2E2E2"}
+
+
+def load_categories():
+    """Copies the categories table into the icon/colour lookups used all over the UI."""
+    CATEGORY_ICONS.clear()
+    CATEGORY_COLORS.clear()
+    CATEGORY_ICONS["All"], CATEGORY_COLORS["All"] = I.APPS, "#E2E2E2"
+    for r in db.list_categories():
+        CATEGORY_ICONS[r["name"]] = ICON_CHOICES.get(r["icon"], I.MORE_HORIZ)
+        CATEGORY_COLORS[r["name"]] = r["color"]
+
+
 WALLET_ICONS = {"Bank": ft.Icons.ACCOUNT_BALANCE, "Wallet": ft.Icons.ACCOUNT_BALANCE_WALLET, "All": ft.Icons.APPS}
 PIE_COLORS = [ft.Colors.BLUE, ft.Colors.ORANGE, ft.Colors.GREEN, ft.Colors.PURPLE,
               ft.Colors.TEAL, ft.Colors.PINK, ft.Colors.AMBER, ft.Colors.CYAN]
 ALL = "All"
-CATEGORY_COLORS = {  # soft pastel circles behind each icon
-    "Food": "#FFD8A8", "Transport": "#B8E0F6", "Bills": "#D9C8F5", "Shopping": "#C8EBC6",
-    "Health": "#FFC9D6", "Entertainment": "#F8D5F0", "Salary": "#FFE9A0", "Other": "#E2E2E2", "All": "#E2E2E2",
-}
-
-
 def badge(category, size=44, selected=False):
     return ft.Container(
         ft.Icon(CATEGORY_ICONS.get(category, ft.Icons.MORE_HORIZ), color="#5D4037", size=size * 0.5),
@@ -72,6 +84,7 @@ def kind_options():
 
 def main(page: ft.Page):
     db.init_db()
+    load_categories()
     sv.CURRENCY = db.get_setting("currency", "RM")
     db.apply_recurring(sv.today())
     state = {"month": sv.today()[:7], "tab": 0}
@@ -246,8 +259,7 @@ def main(page: ft.Page):
         page.open(sheet)
 
     # ================= BUDGETS (dropdown) =================
-    budget_categories = [c for c in db.CATEGORIES if c != "Salary"]
-    budget_cat = dropdown("Category", budget_categories[0], icon_options(budget_categories, CATEGORY_ICONS))
+    budget_cat = dropdown("Category", db.CATEGORIES[0], icon_options(db.CATEGORIES, CATEGORY_ICONS))
     budget_amount = field(label="Monthly limit", prefix_text=prefix(), text_size=24,
                           keyboard_type=ft.KeyboardType.NUMBER)
     budget_info = ft.Text()
@@ -423,6 +435,7 @@ def main(page: ft.Page):
         page.title = app_title.value = app_name_field.value = name
         currency_field.value = sv.CURRENCY
         budget_amount.prefix_text = prefix()
+        refresh_category_controls()
         refresh_recurring()
         load_budget()
         refresh()
@@ -721,6 +734,95 @@ def main(page: ft.Page):
          card(account_rows), ft.Container(height=100)],
         scroll=ft.ScrollMode.AUTO, spacing=14, expand=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
 
+    # ================= CATEGORIES (add / edit / delete) =================
+    category_rows = ft.Column(spacing=0)
+
+    def refresh_category_controls():
+        load_categories()
+        names = [ALL] + db.CATEGORIES
+        f_category.options = icon_options(names, CATEGORY_ICONS)
+        if f_category.value not in names:
+            f_category.value = ALL
+        budget_cat.options = icon_options(db.CATEGORIES, CATEGORY_ICONS)
+        if budget_cat.value not in db.CATEGORIES:
+            budget_cat.value = db.CATEGORIES[0]
+
+    def build_category_rows():
+        category_rows.controls = [
+            ft.Container(
+                ft.Row([badge(r["name"], 40), ft.Text(r["name"], size=16, expand=True),
+                        ft.Icon(ft.Icons.EDIT_OUTLINED, color=ft.Colors.OUTLINE)],
+                       spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                padding=ft.padding.symmetric(horizontal=8, vertical=8), ink=True,
+                on_click=lambda e, n=r["name"]: edit_category(n))
+            for r in db.list_categories()]
+
+    def after_category_change():
+        refresh_category_controls()
+        build_category_rows()
+        refresh()
+        toast("Saved")
+
+    def edit_category(name=None):
+        current = next((r for r in db.list_categories() if r["name"] == name), None) if name else None
+        pick = {"icon": current["icon"] if current else "more", "color": current["color"] if current else COLOR_CHOICES[0]}
+        name_box = field(label="Name", value=name or "")
+        error = ft.Text(color=ft.Colors.RED)
+        preview = ft.Row(alignment=ft.MainAxisAlignment.CENTER)
+        icon_row = ft.Row(wrap=True, spacing=6, run_spacing=6, alignment=ft.MainAxisAlignment.CENTER)
+        color_row = ft.Row(wrap=True, spacing=8, run_spacing=8, alignment=ft.MainAxisAlignment.CENTER)
+
+        def choose(key, value):
+            pick[key] = value
+            draw()
+
+        def draw():
+            preview.controls = [ft.Container(
+                ft.Icon(ICON_CHOICES.get(pick["icon"], I.MORE_HORIZ), color="#5D4037", size=30), width=60, height=60,
+                border_radius=30, bgcolor=pick["color"], alignment=ft.alignment.center)]
+            icon_row.controls = [
+                ft.Container(ft.Icon(icon, size=22), width=42, height=42, border_radius=10,
+                             alignment=ft.alignment.center,
+                             bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE),
+                             border=ft.border.all(2, YELLOW) if key == pick["icon"] else None,
+                             on_click=lambda e, k=key: choose("icon", k))
+                for key, icon in ICON_CHOICES.items()]
+            color_row.controls = [
+                ft.Container(width=32, height=32, border_radius=16, bgcolor=c,
+                             border=ft.border.all(3, ft.Colors.ON_SURFACE) if c == pick["color"] else None,
+                             on_click=lambda e, c=c: choose("color", c))
+                for c in COLOR_CHOICES]
+            page.update()
+
+        def run(action):
+            try:
+                action()
+            except ValueError as problem:
+                error.value = str(problem)
+                page.update()
+                return
+            page.close(dialog)
+            after_category_change()
+
+        actions = [ft.TextButton("Cancel", on_click=lambda e: page.close(dialog)),
+                   ft.FilledButton("Save", on_click=lambda e: run(
+                       (lambda: db.update_category(name, name_box.value, pick["icon"], pick["color"])) if current
+                       else (lambda: db.add_category(name_box.value, pick["icon"], pick["color"]))))]
+        if current:
+            actions.insert(0, ft.TextButton("Delete", on_click=lambda e: run(lambda: db.delete_category(name))))
+        dialog = ft.AlertDialog(
+            title=ft.Text("Edit category" if current else "New category"),
+            content=ft.Column([preview, name_box, ft.Text("Icon", size=12), icon_row, ft.Text("Colour", size=12),
+                               color_row, error], tight=True, width=320, scroll=ft.ScrollMode.AUTO),
+            actions=actions)
+        draw()
+        page.open(dialog)
+
+    def open_category_page():
+        build_category_rows()
+        open_subpage("Category", card(category_rows, ft.FilledTonalButton(
+            "Add category", icon=ft.Icons.ADD, on_click=lambda e: edit_category())))
+
     # ================= MINE =================
     m_exp, m_inc, m_count = amount_text(), amount_text(), amount_text()
 
@@ -760,7 +862,8 @@ def main(page: ft.Page):
                       stat_cell("Records", m_count)])),
          ft.Text("Commonly Used", size=18),
          tile_grid(tile(ft.Icons.BAR_CHART, "#F5A623", "Budget", lambda e: open_budget_page()),
-                   tile(ft.Icons.EVENT_REPEAT, "#4A90E2", "Recurring Transactions", lambda e: open_recurring_page())),
+                   tile(ft.Icons.EVENT_REPEAT, "#4A90E2", "Recurring Transactions", lambda e: open_recurring_page()),
+                   tile(ft.Icons.GRID_VIEW, "#E8704A", "Category", lambda e: open_category_page())),
          ft.Text("Settings", size=18),
          tile_grid(tile(ft.Icons.PALETTE, "#E86AA6", "Appearance", lambda e: open_subpage("Appearance", card(dark_switch))),
                    tile(ft.Icons.MONETIZATION_ON, "#E8A33D", "Preferences",
