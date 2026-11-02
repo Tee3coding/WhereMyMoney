@@ -23,6 +23,27 @@ The in-app name (top bar) can be changed any time in Settings.
 Settings > Data > **Export data** (save the file or copy the text), send it to the new phone, then
 Settings > Data > **Import data** there. Importing replaces everything in the app with the backup.
 
+## Build the Android APK (3 extra steps because of the notification package)
+Needs Python 3.11 or newer (3.12 or 3.13 recommended), Android Studio (for the Android SDK) and JDK 17.
+Use a **fresh virtual environment**, then `pip install -r requirements.txt`.
+
+1. **Export your data first** (Mine > Export Data) if the app is already installed.
+2. In the project folder (environment active; on Windows run `set PYTHONIOENCODING=utf-8` first):
+   `flet build apk -v --bundle-id com.wheremymoney`
+   This is expected to **fail with a "desugaring" error**. Only that failure is OK. Any other error must be fixed first.
+3. Patch the generated Android project: `flet-android-notifications-patch --project-root build/flutter`
+4. Rebuild it with Flutter: `cd build/flutter`, then `flutter build apk --release`.
+   Flutter was downloaded by Flet (look in `C:\Users\<you>\flutter\<version>\bin`); add that folder to `PATH` if `flutter` is not found.
+5. Install over the old app: `adb install -r build\app\outputs\flutter-apk\app-release.apk`
+   (`-r` keeps your data). Or copy the APK to your phone and open it.
+
+Repeat steps 2 to 5 every time you build (the patch is lost when the project is regenerated).
+Icon: `src/assets/icon.png`. Home screen name: `product` in `pyproject.toml`.
+
+## Moving to a new phone
+Settings > Data > **Export data** (save the file or copy the text), send it to the new phone, then
+Settings > Data > **Import data** there. Importing replaces everything in the app with the backup.
+
 ## Build the Android APK
 1. Install Android Studio (gives you the Android SDK) and a JDK 17.
 2. In the project folder (virtual environment active): `flet build apk --bundle-id com.wheremymoney`
