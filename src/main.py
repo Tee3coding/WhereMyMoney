@@ -610,37 +610,59 @@ def main(page: ft.Page):
         return ft.Container(ft.Row([text_control, ft.Icon(ft.Icons.ARROW_DROP_DOWN)], tight=True, spacing=0),
                             on_click=pick_month)
 
-    # ---- filters ----
-    search_box = field(label="Search notes or categories", prefix_icon=ft.Icons.SEARCH, visible=False,
-                       on_change=lambda e: refresh())
-    f_category = dropdown("Category", ALL, icon_options([ALL] + db.CATEGORIES, CATEGORY_ICONS),
-                          on_change=lambda e: refresh())
-    f_kind = dropdown("Type", ALL, [ft.dropdown.Option(ALL)] + kind_options(), on_change=lambda e: refresh())
-    f_wallet = dropdown("Account", ALL, icon_options([ALL] + db.WALLETS, WALLET_ICONS),
-                        on_change=lambda e: refresh())
-    f_all_months = ft.Switch(label="All months", value=False, on_change=lambda e: refresh())
+    # ---- filters: tap to filter, tap again to clear ----
+    fl = {"wallet": "", "kind": "", "category": ""}
+    search_box = field(label="Search notes or categories", prefix_icon=ft.Icons.SEARCH, on_change=lambda e: refresh())
+    f_all_months = ft.Switch(label="Search all months", value=False, on_change=lambda e: refresh())
+    search_panel = ft.Column([search_box, f_all_months], visible=False, spacing=4)
+    GROUPS = {
+        "wallet": [("Bank", I.ACCOUNT_BALANCE, "Bank", None), ("Wallet", I.ACCOUNT_BALANCE_WALLET, "Wallet", None)],
+        "kind": [("expense", I.ARROW_UPWARD, "Expenses", ft.Colors.RED), ("income", I.ARROW_DOWNWARD, "Income", ft.Colors.GREEN)],
+    }
+    group_rows = []
 
-    def toggle_search(e):
-        search_box.visible = not search_box.visible
-        if not search_box.visible:
-            search_box.value = ""
+    def toggle_filter(key, value):
+        fl[key] = "" if fl[key] == value else value
         refresh()
 
-    def open_filters(e=None, only_account=False):
-        def reset(ev):
-            f_category.value = f_kind.value = f_wallet.value = ALL
-            f_all_months.value = False
-            page.close(dialog)
-            refresh()
+    def make_group(key):
+        """Two round buttons joined in one capsule."""
+        row = ft.Row(spacing=0)
+        group_rows.append((row, key))
+        return ft.Container(row, padding=2, border_radius=24, bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE))
 
-        controls = [f_wallet] if only_account else [f_category, f_kind, f_wallet, f_all_months]
-        dialog = ft.AlertDialog(
-            title=ft.Text("Filter"), content=ft.Column(controls, tight=True, width=300),
-            actions=[ft.TextButton("Reset", on_click=reset), ft.TextButton("Done", on_click=lambda ev: page.close(dialog))])
-        page.open(dialog)
+    def draw_groups():
+        for row, key in group_rows:
+            row.controls = [
+                ft.Container(ft.Icon(icon, size=20, color=BLACK if fl[key] == value else (color or ft.Colors.ON_SURFACE)),
+                             width=40, height=40, border_radius=20, alignment=ft.alignment.center, tooltip=tip,
+                             bgcolor=YELLOW if fl[key] == value else None,
+                             on_click=lambda e, k=key, v=value: toggle_filter(k, v))
+                for value, icon, tip, color in GROUPS[key]]
+
+    chip_row = ft.Row(scroll=ft.ScrollMode.AUTO, spacing=8)
+
+    def draw_chips():
+        def chip(name):
+            value = "" if name == ALL else name
+            on = fl["category"] == value
+            return ft.Container(
+                ft.Row([ft.Icon(CATEGORY_ICONS.get(name, I.MORE_HORIZ), size=16, color=BLACK if on else None),
+                        ft.Text(name, size=13, color=BLACK if on else None)], tight=True, spacing=6),
+                padding=ft.padding.symmetric(horizontal=12, vertical=8), border_radius=20,
+                bgcolor=YELLOW if on else ft.Colors.SURFACE,
+                on_click=lambda e, v=value: toggle_filter("category", v))
+        chip_row.controls = [chip(n) for n in [ALL] + db.CATEGORIES]
+
+    def toggle_search(e):
+        search_panel.visible = not search_panel.visible
+        if not search_panel.visible:
+            search_box.value = ""
+            f_all_months.value = False
+        refresh()
 
     def wallet_filter():
-        return "" if f_wallet.value == ALL else f_wallet.value
+        return fl["wallet"]
 
     def stat_cell(title, value, arrow=None, color=None):
         head = ([ft.Icon(arrow, color=color, size=16)] if arrow else []) + [ft.Text(title, size=14, color=ft.Colors.OUTLINE)]
@@ -663,10 +685,11 @@ def main(page: ft.Page):
     budget_hint = ft.Text(size=15, expand=True)
     home_list = ft.Column(spacing=10)
     home_header = ft.Row(
-        [ft.IconButton(ft.Icons.FILTER_LIST, on_click=open_filters), month_button(home_month),
+        [ft.Container(width=48), month_button(home_month),
          ft.Row([ft.IconButton(ft.Icons.SEARCH, on_click=toggle_search),
                  ft.IconButton(ft.Icons.CALENDAR_MONTH, on_click=pick_month)], spacing=0)],
         alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+    home_filters = ft.Column([ft.Row([make_group("wallet"), make_group("kind")], spacing=12), chip_row], spacing=10)
     summary_card = card(
         ft.Row([stat_cell("Expenses", h_exp, ft.Icons.ARROW_UPWARD, ft.Colors.RED), divider(),
                 stat_cell("Income", h_inc, ft.Icons.ARROW_DOWNWARD, ft.Colors.GREEN), divider(),
@@ -674,7 +697,7 @@ def main(page: ft.Page):
         ft.Divider(height=1),
         ft.Container(ft.Row([budget_hint, ft.Icon(ft.Icons.CHEVRON_RIGHT)]), padding=ft.padding.symmetric(vertical=6),
                      on_click=lambda e: open_budget_page()))
-    home_view = ft.Column([home_header, search_box, summary_card, home_list, ft.Container(height=100)],
+    home_view = ft.Column([home_header, home_filters, search_panel, summary_card, home_list, ft.Container(height=100)],
                           scroll=ft.ScrollMode.AUTO, spacing=12, expand=True)
 
     def record_tile(t):
@@ -697,8 +720,7 @@ def main(page: ft.Page):
         month, today = state["month"], sv.today()
         rows = db.list_transactions(
             None if f_all_months.value else month, (search_box.value or "").strip(),
-            "" if f_category.value == ALL else f_category.value,
-            "" if f_kind.value == ALL else f_kind.value, wallet_filter())
+            fl["category"], fl["kind"], fl["wallet"])
         out = []
         if month == today[:7] and not f_all_months.value and not any(t["date"] == today for t in rows):
             out += [ft.Text(f"Today {day_label(today)}", size=18, weight=ft.FontWeight.BOLD),
@@ -744,9 +766,8 @@ def main(page: ft.Page):
     pie = ft.PieChart(sections=[], sections_space=1, center_space_radius=0)
     pie_legend, top_list = ft.Column(spacing=8), ft.Column(spacing=10)
     reports_view = ft.Column(
-        [ft.Row([ft.Container(width=60), month_button(rep_month),
-                 ft.TextButton("Filter", on_click=lambda e: open_filters(only_account=True))],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+        [ft.Row([month_button(rep_month)], alignment=ft.MainAxisAlignment.CENTER),
+         ft.Row([make_group("wallet")], alignment=ft.MainAxisAlignment.CENTER),
          card(ft.Row([ft.Column([line_total, line_avg], spacing=2, expand=True), make_pill("line")],
                      vertical_alignment=ft.CrossAxisAlignment.START), line_chart),
          card(ft.Row([ft.Text("Category Ranking", size=18, expand=True), make_pill("pie")]),
@@ -774,10 +795,8 @@ def main(page: ft.Page):
 
     def refresh_category_controls():
         load_categories()
-        names = [ALL] + db.CATEGORIES
-        f_category.options = icon_options(names, CATEGORY_ICONS)
-        if f_category.value not in names:
-            f_category.value = ALL
+        if fl["category"] not in db.CATEGORIES:
+            fl["category"] = ""
         budget_cat.options = icon_options(db.CATEGORIES, CATEGORY_ICONS)
         if budget_cat.value not in db.CATEGORIES:
             budget_cat.value = db.CATEGORIES[0]
@@ -964,6 +983,8 @@ def main(page: ft.Page):
 
     def refresh():
         month = state["month"]
+        draw_groups()
+        draw_chips()
         home_month.value = rep_month.value = month_title(month)
         income, expense = db.month_totals(month)
         h_exp.value, h_inc.value, h_bal.value = sv.money(expense), sv.money(income), sv.money(income - expense)
