@@ -897,7 +897,8 @@ def main(page: ft.Page):
             [ft.Row([ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: show_tab(state["tab"])),
                      ft.Text(title, size=20, weight=ft.FontWeight.W_500)]), *controls],
             scroll=ft.ScrollMode.AUTO, spacing=12, expand=True)
-        page.floating_action_button.visible = False
+        state["sub"] = True
+        build_nav()
         page.update()
 
     def open_budget_page():
@@ -921,12 +922,14 @@ def main(page: ft.Page):
                 ft.Column([ft.Icon(icon, color=color, size=26), ft.Text(name, size=11, color=color)],
                           horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=2),
                 expand=True, on_click=lambda e, i=i: show_tab(i)))
-        nav_row.controls = items[:2] + [ft.Container(width=76)] + items[2:]
+        plus_visible = state["tab"] == 0 and not state.get("sub")  # the + button lives on Home only
+        nav_row.controls = items[:2] + ([ft.Container(width=76)] if plus_visible else []) + items[2:]
+        page.floating_action_button.visible = plus_visible
 
     def show_tab(index):
         state["tab"] = index
         body.content = tabs[index]
-        page.floating_action_button.visible = True
+        state["sub"] = False
         build_nav()
         refresh()
 

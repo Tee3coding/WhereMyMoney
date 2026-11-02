@@ -1,6 +1,6 @@
 [project]
 name = "wheremymoney"
-version = "0.5.0"
+version = "0.7.0"
 description = "Personal income and expense tracker"
 requires-python = ">=3.9"
 dependencies = ["flet==0.28.3"]
@@ -8,10 +8,10 @@ dependencies = ["flet==0.28.3"]
 [tool.flet]
 # Name shown under the icon on your phone's home screen:
 product = "WhereMyMoney"
-# Unique app id (reverse-domain style). Change "yourname" before building.
-org = "com.yourname"
-company = "Your Name"
-copyright = "Copyright (C) 2026 Your Name"
+org = "com.wheremymoney"
+bundle_id = "com.wheremymoney"   # the exact app ID (see README if your build shows a different one)
+company = "WhereMyMoney"
+copyright = "Copyright (C) 2026 WhereMyMoney"
 
 [tool.flet.app]
 path = "src"

@@ -25,7 +25,8 @@ Settings > Data > **Import data** there. Importing replaces everything in the ap
 
 ## Build the Android APK
 1. Install Android Studio (gives you the Android SDK) and a JDK 17.
-2. In the project folder (virtual environment active): `flet build apk`
+2. In the project folder (virtual environment active): `flet build apk --bundle-id com.wheremymoney`
+   (the app ID is also set in `pyproject.toml`; the flag makes sure it is exactly `com.wheremymoney`)
 3. The APK appears in `build/apk/`. Copy it to your phone and open it
    (allow "install unknown apps" for your file manager or browser when asked).
 4. Your icon is `src/assets/icon.png` (replace with your own square PNG, 1024x1024).
