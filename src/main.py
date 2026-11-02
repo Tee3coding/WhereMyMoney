@@ -41,6 +41,19 @@ WALLET_ICONS = {"Bank": ft.Icons.ACCOUNT_BALANCE, "Wallet": ft.Icons.ACCOUNT_BAL
 PIE_COLORS = [ft.Colors.BLUE, ft.Colors.ORANGE, ft.Colors.GREEN, ft.Colors.PURPLE,
               ft.Colors.TEAL, ft.Colors.PINK, ft.Colors.AMBER, ft.Colors.CYAN]
 ALL = "All"
+
+THEME_MODES = {"system": ft.ThemeMode.SYSTEM, "light": ft.ThemeMode.LIGHT, "dark": ft.ThemeMode.DARK}
+
+
+def saved_theme():
+    """'system' (follow the phone) unless the user picked light or dark before."""
+    value = db.get_setting("theme", "")
+    if value in THEME_MODES:
+        return value
+    old = db.get_setting("dark_mode", "")  # setting used by earlier versions
+    return "system" if old == "" else ("dark" if old == "1" else "light")
+
+
 def badge(category, size=44, selected=False):
     return ft.Container(
         ft.Icon(CATEGORY_ICONS.get(category, ft.Icons.MORE_HORIZ), color="#5D4037", size=size * 0.5),
@@ -97,15 +110,26 @@ def main(page: ft.Page):
             outline="#8E8E93", secondary_container="#2A2A2D" if dark else "#E8E8ED",
             on_secondary_container="#FFFFFF" if dark else "#111111")
 
+    def is_dark():
+        mode = page.theme_mode
+        return mode == ft.ThemeMode.DARK or (mode == ft.ThemeMode.SYSTEM
+                                             and page.platform_brightness == ft.Brightness.DARK)
+
     def apply_theme():
         page.theme = ft.Theme(color_scheme=scheme(False))
         page.dark_theme = ft.Theme(color_scheme=scheme(True))
-        page.bgcolor = BG_DARK if page.theme_mode == ft.ThemeMode.DARK else BG_LIGHT
+        page.bgcolor = BG_DARK if is_dark() else BG_LIGHT
 
     page.title = db.get_setting("app_name", "WhereMyMoney")
     page.padding = 0
-    page.theme_mode = ft.ThemeMode.DARK if db.get_setting("dark_mode", "1") == "1" else ft.ThemeMode.LIGHT
+    page.theme_mode = THEME_MODES[saved_theme()]
     apply_theme()
+
+    def on_phone_theme_change(e):  # phone switched between light and dark while the app is open
+        apply_theme()
+        page.update()
+
+    page.on_platform_brightness_change = on_phone_theme_change
     app_title = ft.Text(page.title, size=20, weight=ft.FontWeight.BOLD)
 
     def toast(message):
@@ -308,9 +332,10 @@ def main(page: ft.Page):
     )
 
     # ================= SETTINGS (text boxes save by themselves) =================
-    def toggle_dark(e):
-        page.theme_mode = ft.ThemeMode.DARK if e.control.value else ft.ThemeMode.LIGHT
-        db.set_setting("dark_mode", "1" if e.control.value else "0")
+    def set_theme(e):
+        choice = next(iter(e.control.selected))
+        db.set_setting("theme", choice)
+        page.theme_mode = THEME_MODES[choice]
         apply_theme()
         page.update()
 
@@ -431,9 +456,8 @@ def main(page: ft.Page):
     def apply_settings():
         """Re-reads every setting from the database (used after an import)."""
         sv.CURRENCY = db.get_setting("currency", "RM")
-        dark = db.get_setting("dark_mode", "1") == "1"
-        page.theme_mode = ft.ThemeMode.DARK if dark else ft.ThemeMode.LIGHT
-        dark_switch.value = dark
+        theme_seg.selected = {saved_theme()}
+        page.theme_mode = THEME_MODES[saved_theme()]
         open_add_switch.value = db.get_setting("open_add", "0") == "1"
         apply_theme()
         name = db.get_setting("app_name", "WhereMyMoney")
@@ -516,7 +540,11 @@ def main(page: ft.Page):
         )
         page.open(dialog)
 
-    dark_switch = ft.Switch(label="Dark mode", value=page.theme_mode == ft.ThemeMode.DARK, on_change=toggle_dark)
+    theme_seg = ft.SegmentedButton(
+        selected={saved_theme()}, allow_multiple_selection=False, show_selected_icon=False, on_change=set_theme,
+        segments=[ft.Segment(value="system", label=ft.Text("Phone"), icon=ft.Icon(ft.Icons.BRIGHTNESS_AUTO)),
+                  ft.Segment(value="light", label=ft.Text("Light"), icon=ft.Icon(ft.Icons.LIGHT_MODE)),
+                  ft.Segment(value="dark", label=ft.Text("Dark"), icon=ft.Icon(ft.Icons.DARK_MODE))])
     # ================= PAGES =================
     MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
     BLACK = "#000000"
@@ -875,7 +903,8 @@ def main(page: ft.Page):
                    tile(ft.Icons.EVENT_REPEAT, "#4A90E2", "Recurring Transactions", lambda e: open_recurring_page()),
                    tile(ft.Icons.GRID_VIEW, "#E8704A", "Category", lambda e: open_category_page())),
          ft.Text("Settings", size=18),
-         tile_grid(tile(ft.Icons.PALETTE, "#E86AA6", "Appearance", lambda e: open_subpage("Appearance", card(dark_switch))),
+         tile_grid(tile(ft.Icons.PALETTE, "#E86AA6", "Appearance", lambda e: open_subpage("Appearance", card(label("THEME"), theme_seg,
+                                                                    ft.Text("Phone = follow your phone's light or dark setting.", size=12)))),
                    tile(ft.Icons.MONETIZATION_ON, "#E8A33D", "Preferences",
                         lambda e: open_subpage("Preferences", card(label("NAME"), app_name_field),
                                                card(label("CURRENCY"), currency_field),
