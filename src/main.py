@@ -154,7 +154,8 @@ def main(page: ft.Page):
     month_labels = []
 
     def change_month(delta):
-        state["month"] = sv.shift_month(state["month"], delta)
+        step = 12 if state["tab"] == 1 and fl["period"] == "year" else 1  # Reports in Year view moves by a year
+        state["month"] = sv.shift_month(state["month"], delta * step)
         refresh()
 
     def month_bar():
@@ -611,18 +612,19 @@ def main(page: ft.Page):
                             on_click=pick_month)
 
     # ---- filters: tap to filter, tap again to clear ----
-    fl = {"wallet": "", "kind": "", "category": ""}
+    fl = {"wallet": "", "kind": "", "category": "", "period": "month"}
     search_box = field(label="Search notes or categories", prefix_icon=ft.Icons.SEARCH, on_change=lambda e: refresh())
     f_all_months = ft.Switch(label="Search all months", value=False, on_change=lambda e: refresh())
     search_panel = ft.Column([search_box, f_all_months], visible=False, spacing=4)
     GROUPS = {
         "wallet": [("Bank", I.ACCOUNT_BALANCE, "Bank", None), ("Wallet", I.ACCOUNT_BALANCE_WALLET, "Wallet", None)],
+        "period": [("month", I.CALENDAR_VIEW_MONTH, "Month", None), ("year", I.CALENDAR_MONTH, "Year", None)],
         "kind": [("expense", I.ARROW_UPWARD, "Expenses", ft.Colors.RED), ("income", I.ARROW_DOWNWARD, "Income", ft.Colors.GREEN)],
     }
     group_rows = []
 
     def toggle_filter(key, value):
-        fl[key] = "" if fl[key] == value else value
+        fl[key] = value if key == "period" else ("" if fl[key] == value else value)  # Month/Year: one is always on
         refresh()
 
     def make_group(key):
@@ -774,7 +776,7 @@ def main(page: ft.Page):
     pie_legend, top_list = ft.Column(spacing=8), ft.Column(spacing=10)
     reports_view = ft.Column(
         [ft.Row([month_button(rep_month)], alignment=ft.MainAxisAlignment.CENTER),
-         ft.Row([make_group("wallet")], alignment=ft.MainAxisAlignment.CENTER),
+         ft.Row([make_group("wallet"), make_group("period")], alignment=ft.MainAxisAlignment.CENTER, spacing=12),
          card(ft.Row([ft.Column([line_total, line_avg], spacing=2, expand=True), make_pill("line")],
                      vertical_alignment=ft.CrossAxisAlignment.START), line_chart),
          card(ft.Row([ft.Text("Category Ranking", size=18, expand=True), make_pill("pie")]),
@@ -992,7 +994,8 @@ def main(page: ft.Page):
         month = state["month"]
         draw_groups()
         draw_chips()
-        home_month.value = rep_month.value = month_title(month)
+        home_month.value = month_title(month)
+        rep_month.value = month[:4] if fl["period"] == "year" else month_title(month)
         income, expense = db.month_totals(month)
         h_exp.value, h_inc.value, h_bal.value = sv.money(expense), sv.money(income), sv.money(income - expense)
         m_exp.value, m_inc.value = sv.money(expense), sv.money(income)
@@ -1009,11 +1012,17 @@ def main(page: ft.Page):
         wallet = wallet_filter()
         for key, text in pill_texts.items():
             text.value = "Expenses" if r_state[key] == "expense" else "Income"
-        days = calendar.monthrange(int(month[:4]), int(month[5:7]))[1]
-        daily = db.daily_totals(month, r_state["line"], wallet)
+        year_mode = fl["period"] == "year"
+        period = month[:4] if year_mode else month
+        if year_mode:
+            days, daily = 12, db.monthly_totals(period, r_state["line"], wallet)
+            divisor = int(sv.today()[5:7]) if period == sv.today()[:4] else 12  # this year: months so far
+        else:
+            days = calendar.monthrange(int(month[:4]), int(month[5:7]))[1]
+            daily, divisor = db.daily_totals(month, r_state["line"], wallet), days
         total_line = sum(daily.values())
         line_total.value = f"{pill_texts['line'].value}: {sv.money(total_line)}"
-        line_avg.value = f"Average: {sv.money(total_line // days)}"
+        line_avg.value = f"Average per {'month' if year_mode else 'day'}: {sv.money(total_line // divisor)}"
         step = nice_step(max(list(daily.values()) + [0]) / 100 / 5)
         line_chart.data_series = [ft.LineChartData(
             data_points=[ft.LineChartDataPoint(d, daily.get(d, 0) / 100) for d in range(1, days + 1)],
@@ -1022,10 +1031,10 @@ def main(page: ft.Page):
         line_chart.horizontal_grid_lines.interval = step
         line_chart.left_axis.labels = [ft.ChartAxisLabel(value=i * step, label=ft.Text(f"{i * step:g}", size=11,
                                        color=ft.Colors.OUTLINE)) for i in range(6)]
-        line_chart.bottom_axis.labels = [ft.ChartAxisLabel(value=d, label=ft.Text(str(d), size=11,
-                                         color=ft.Colors.OUTLINE)) for d in range(1, days + 1, 3)]
+        line_chart.bottom_axis.labels = [ft.ChartAxisLabel(value=d, label=ft.Text(MONTHS[d - 1] if year_mode else str(d), size=11,
+                                         color=ft.Colors.OUTLINE)) for d in range(1, days + 1, 2 if year_mode else 3)]
 
-        rows = db.category_totals(month, r_state["pie"], wallet)
+        rows = db.category_totals(period, r_state["pie"], wallet)
         total = sum(r["total"] for r in rows)
         pie.sections = [ft.PieChartSection(r["total"] / 100, radius=100, color=PIE_COLORS[i % len(PIE_COLORS)],
                                            title=f"{r['total'] * 100 / total:.1f}%",
@@ -1035,7 +1044,7 @@ def main(page: ft.Page):
             ft.Row([ft.Container(width=10, height=10, border_radius=5, bgcolor=PIE_COLORS[i % len(PIE_COLORS)]),
                     ft.Text(r["category"], expand=True), ft.Text(sv.money(r["total"]))], spacing=8)
             for i, r in enumerate(rows)] or [ft.Text("No data this month.", color=ft.Colors.OUTLINE)]
-        top = db.top_transactions(month, r_state["top"], wallet)
+        top = db.top_transactions(period, r_state["top"], wallet)
         top_list.controls = [
             ft.Row([badge(t["category"], 40),
                     ft.Column([ft.Text(t["category"]), ft.Text(f"{t['date'][5:]}  {t['note']}".strip(), size=12,

@@ -207,7 +207,8 @@ def month_totals(month: str) -> tuple[int, int]:
 
 
 def _month_filter(month, kind, wallet):
-    sql, params = "WHERE type = ? AND substr(date, 1, 7) = ?", [kind, month]
+    # `month` can also be a year like "2026": the date prefix is compared either way
+    sql, params = "WHERE type = ? AND substr(date, 1, ?) = ?", [kind, len(month), month]
     if wallet:
         sql += " AND wallet = ?"
         params.append(wallet)
@@ -231,6 +232,16 @@ def daily_totals(month: str, kind: str = "expense", wallet: str = "") -> dict[in
             f"SELECT CAST(substr(date, 9, 2) AS INTEGER) AS day, SUM(amount_cents) AS total "
             f"FROM transactions {where} GROUP BY day", params).fetchall()
     return {r["day"]: r["total"] for r in rows}
+
+
+def monthly_totals(year: str, kind: str = "expense", wallet: str = "") -> dict[int, int]:
+    """{month number 1-12: total cents} for the year view of the line chart."""
+    where, params = _month_filter(year, kind, wallet)
+    with _db() as conn:
+        rows = conn.execute(
+            f"SELECT CAST(substr(date, 6, 2) AS INTEGER) AS m, SUM(amount_cents) AS total "
+            f"FROM transactions {where} GROUP BY m", params).fetchall()
+    return {r["m"]: r["total"] for r in rows}
 
 
 def top_transactions(month: str, kind: str = "expense", wallet: str = "", limit: int = 10):
