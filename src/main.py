@@ -632,13 +632,20 @@ def main(page: ft.Page):
         return ft.Container(row, padding=2, border_radius=24, bgcolor=ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE))
 
     def draw_groups():
+        """The chosen option grows into a yellow pill with its word; the others stay as plain round icons."""
+        def option(key, value, icon, tip, color):
+            on = fl[key] == value
+            content = (ft.Row([ft.Icon(icon, size=20, color=BLACK),
+                               ft.Text(tip, size=14, color=BLACK, weight=ft.FontWeight.W_500)], tight=True, spacing=6)
+                       if on else ft.Icon(icon, size=20, color=color or ft.Colors.ON_SURFACE))
+            return ft.Container(content, width=None if on else 40, height=40, border_radius=20,
+                                alignment=ft.alignment.center, tooltip=tip,
+                                padding=ft.padding.symmetric(horizontal=14) if on else None,
+                                bgcolor=YELLOW if on else None,
+                                on_click=lambda e, k=key, v=value: toggle_filter(k, v))
+
         for row, key in group_rows:
-            row.controls = [
-                ft.Container(ft.Icon(icon, size=20, color=BLACK if fl[key] == value else (color or ft.Colors.ON_SURFACE)),
-                             width=40, height=40, border_radius=20, alignment=ft.alignment.center, tooltip=tip,
-                             bgcolor=YELLOW if fl[key] == value else None,
-                             on_click=lambda e, k=key, v=value: toggle_filter(k, v))
-                for value, icon, tip, color in GROUPS[key]]
+            row.controls = [option(key, value, icon, tip, color) for value, icon, tip, color in GROUPS[key]]
 
     chip_row = ft.Row(scroll=ft.ScrollMode.AUTO, spacing=8)
 
