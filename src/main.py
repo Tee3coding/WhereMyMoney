@@ -2,6 +2,7 @@
 import calendar
 import math
 import re
+import time
 from datetime import datetime
 
 import flet as ft
@@ -491,6 +492,7 @@ def main(page: ft.Page):
     def open_export(e):
         def save_file(ev):
             page.close(dialog)
+            state["skip_lock"] = True  # the system file dialog pauses the app: don't lock for that
             saver.save_file(file_name=f"wheremymoney-backup-{sv.today()}.json", allowed_extensions=["json"])
 
         def copy_text(ev):
@@ -525,6 +527,7 @@ def main(page: ft.Page):
     def open_import(e):
         def choose_file(ev):
             page.close(dialog)
+            state["skip_lock"] = True
             opener.pick_files(dialog_title="Choose backup file", allowed_extensions=["json"])
 
         def paste_text(ev):
@@ -931,7 +934,8 @@ def main(page: ft.Page):
                    tile(ft.Icons.EVENT_REPEAT, "#4A90E2", "Recurring Transactions", lambda e: open_recurring_page()),
                    tile(ft.Icons.GRID_VIEW, "#E8704A", "Category", lambda e: open_category_page())),
          ft.Text("Settings", size=18),
-         tile_grid(tile(ft.Icons.PALETTE, "#E86AA6", "Appearance", lambda e: open_subpage("Appearance", card(label("THEME"), theme_seg,
+         tile_grid(tile(ft.Icons.LOCK, "#7E57C2", "App Lock", lambda e: open_lock_page()),
+                   tile(ft.Icons.PALETTE, "#E86AA6", "Appearance", lambda e: open_subpage("Appearance", card(label("THEME"), theme_seg,
                                                                     ft.Text("Phone = follow your phone's light or dark setting.", size=12)))),
                    tile(ft.Icons.MONETIZATION_ON, "#E8A33D", "Preferences",
                         lambda e: open_subpage("Preferences", card(label("NAME"), app_name_field),
@@ -943,6 +947,146 @@ def main(page: ft.Page):
                    tile(ft.Icons.DOWNLOAD, "#4FB477", "Import Data", open_import)),
          ft.Container(height=100)],
         scroll=ft.ScrollMode.AUTO, spacing=12, expand=True)
+
+    # ================= APP LOCK (optional 4-digit PIN) =================
+    lock_state = {"pin": ""}
+    lock_dots = ft.Row(alignment=ft.MainAxisAlignment.CENTER, spacing=14)
+    lock_msg = ft.Text(color=ft.Colors.RED, size=13, height=20)
+
+    def lock_enabled():
+        return bool(db.get_setting("lock", ""))
+
+    def draw_dots():
+        lock_dots.controls = [
+            ft.Container(width=16, height=16, border_radius=8,
+                         bgcolor=YELLOW if i < len(lock_state["pin"]) else ft.Colors.with_opacity(0.25, ft.Colors.ON_SURFACE))
+            for i in range(4)]
+
+    def lock_key(k):
+        if k == "":
+            return ft.Container(width=72, height=72)
+        return ft.Container(ft.Text(k, size=26), width=72, height=72, border_radius=36, alignment=ft.alignment.center,
+                            bgcolor=None if k == "⌫" else ft.Colors.SURFACE, on_click=lambda e, k=k: lock_press(k))
+
+    def lock_press(k):
+        pin = lock_state["pin"]
+        lock_state["pin"] = pin[:-1] if k == "⌫" else (pin + k if len(pin) < 4 else pin)
+        draw_dots()
+        if len(lock_state["pin"]) == 4:
+            try_unlock()
+        page.update()
+
+    def try_unlock():
+        pin, lock_state["pin"] = lock_state["pin"], ""
+        wait = float(db.get_setting("lock_until", "0") or 0) - time.time()
+        if wait > 0:
+            lock_msg.value = f"Too many tries. Wait {int(wait) + 1} seconds."
+        elif sv.check_pin(pin, db.get_setting("lock", "")):
+            db.set_setting("lock_fails", "0")
+            unlock()
+            return
+        else:
+            fails = int(db.get_setting("lock_fails", "0") or 0) + 1
+            db.set_setting("lock_fails", str(fails))
+            lock_msg.value = "Wrong PIN"
+            if fails % 5 == 0:  # every 5 wrong tries the wait grows: 30s, 60s, 90s...
+                db.set_setting("lock_until", str(time.time() + 30 * (fails // 5)))
+                lock_msg.value = f"Too many tries. Wait {30 * (fails // 5)} seconds."
+        draw_dots()
+
+    lock_screen = ft.SafeArea(
+        ft.Container(
+            ft.Column([
+                ft.Icon(ft.Icons.LOCK, size=44, color=YELLOW), ft.Text("Enter your PIN", size=20), lock_dots, lock_msg,
+                ft.Column([ft.Row([lock_key(k) for k in row], alignment=ft.MainAxisAlignment.CENTER, spacing=18)
+                           for row in (["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["", "0", "⌫"])], spacing=14),
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER, spacing=16),
+            alignment=ft.alignment.center, expand=True),
+        expand=True, visible=False)
+
+    def lock():
+        lock_state["pin"] = ""
+        lock_msg.value = ""
+        draw_dots()
+        for c in list(page.overlay):  # close open dialogs/sheets so nothing stays visible over the lock screen
+            if isinstance(c, (ft.AlertDialog, ft.BottomSheet, ft.DatePicker, ft.SnackBar)):
+                c.open = False
+        main_area.visible = False
+        lock_screen.visible = True
+        page.bottom_appbar.visible = False
+        page.floating_action_button.visible = False
+        page.update()
+
+    def unlock():
+        lock_screen.visible = False
+        main_area.visible = True
+        page.bottom_appbar.visible = True
+        build_nav()
+        refresh()
+        if state.pop("open_after_unlock", False):
+            open_entry()
+
+    def on_lifecycle(e):  # lock again whenever the app goes to the background
+        if e.state == ft.AppLifecycleState.RESUME:
+            state["skip_lock"] = False
+        elif e.state in (ft.AppLifecycleState.PAUSE, ft.AppLifecycleState.HIDE):
+            if lock_enabled() and not state.get("skip_lock"):
+                lock()
+
+    def pin_field(text):
+        return field(label=text, password=True, can_reveal_password=True, max_length=4,
+                     keyboard_type=ft.KeyboardType.NUMBER,
+                     input_filter=ft.InputFilter(allow=True, regex_string=r"[0-9]", replacement_string=""))
+
+    def pin_dialog(mode):  # mode: "create", "change" or "disable"
+        old, new, again = pin_field("Current PIN"), pin_field("New PIN (4 digits)"), pin_field("Repeat new PIN")
+        error = ft.Text(color=ft.Colors.RED)
+        fields = ([old] if mode != "create" else []) + ([new, again] if mode != "disable" else [])
+
+        def cancel(e=None):
+            page.close(dialog)
+            sync_lock_controls()
+
+        def ok(e):
+            if mode != "create" and not sv.check_pin(old.value or "", db.get_setting("lock", "")):
+                error.value = "Wrong current PIN"
+            elif mode != "disable" and not re.fullmatch(r"\d{4}", new.value or ""):
+                error.value = "The PIN must be exactly 4 digits"
+            elif mode != "disable" and new.value != again.value:
+                error.value = "The two PINs don't match"
+            else:
+                db.set_setting("lock", "" if mode == "disable" else sv.hash_pin(new.value))
+                db.set_setting("lock_fails", "0")
+                page.close(dialog)
+                sync_lock_controls()
+                toast("App lock turned off" if mode == "disable" else "PIN saved")
+                return
+            page.update()
+
+        dialog = ft.AlertDialog(
+            title=ft.Text({"create": "Create a PIN", "change": "Change PIN", "disable": "Turn off App Lock"}[mode]),
+            content=ft.Column(fields + [error], tight=True, width=300), on_dismiss=cancel,
+            actions=[ft.TextButton("Cancel", on_click=cancel), ft.FilledButton("OK", on_click=ok)])
+        page.open(dialog)
+
+    lock_switch = ft.Switch(label="Ask for a PIN when opening the app", value=lock_enabled(),
+                            on_change=lambda e: pin_dialog("create" if e.control.value else "disable"))
+    change_pin_btn = ft.FilledTonalButton("Change PIN", icon=ft.Icons.EDIT, visible=lock_enabled(),
+                                          on_click=lambda e: pin_dialog("change"))
+
+    def sync_lock_controls():
+        lock_switch.value = lock_enabled()
+        change_pin_btn.visible = lock_enabled()
+        page.update()
+
+    def open_lock_page():
+        sync_lock_controls()
+        open_subpage("App Lock", card(
+            label("APP LOCK"), lock_switch, change_pin_btn,
+            ft.Text("The app asks for your 4-digit PIN when you open it and each time you come back to it. "
+                    "If you forget the PIN, the only way in is to clear the app's data, which erases your records, "
+                    "so use Export Data regularly. The lock keeps other people out of the app; "
+                    "it does not encrypt the data file.", size=12)))
 
     # ================= SUB-PAGES + NAVIGATION =================
     body = ft.Container(expand=True, padding=16)
@@ -1071,10 +1215,16 @@ def main(page: ft.Page):
         icon=ft.Icons.ADD, bgcolor=YELLOW, foreground_color=BLACK, shape=ft.CircleBorder(),
         on_click=lambda e: open_entry())
     page.floating_action_button_location = ft.FloatingActionButtonLocation.CENTER_DOCKED
-    page.add(ft.SafeArea(body, expand=True))
+    main_area = ft.SafeArea(body, expand=True)
+    page.add(main_area, lock_screen)
+    page.on_app_lifecycle_state_change = on_lifecycle
     refresh_recurring()
     show_tab(0)
-    if open_add_switch.value:
+    draw_dots()
+    if lock_enabled():
+        lock()
+        state["open_after_unlock"] = open_add_switch.value
+    elif open_add_switch.value:
         open_entry()
 
 

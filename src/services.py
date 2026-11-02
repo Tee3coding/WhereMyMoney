@@ -70,3 +70,20 @@ def load_backup(text: str) -> dict:
         return json.loads((text or "").strip())
     except ValueError:
         raise ValueError("That isn't a valid backup (the text is incomplete or damaged)")
+
+
+
+def hash_pin(pin: str, salt: str = "") -> str:
+    """Scrambles a PIN so the real digits are never stored. Returns 'salt$hash'."""
+    import hashlib
+    import os
+    salt = salt or os.urandom(16).hex()
+    digest = hashlib.pbkdf2_hmac("sha256", pin.encode(), bytes.fromhex(salt), 120_000).hex()
+    return f"{salt}${digest}"
+
+
+def check_pin(pin: str, stored: str) -> bool:
+    import hmac
+    if "$" not in (stored or ""):
+        return False
+    return hmac.compare_digest(hash_pin(pin, stored.split("$")[0]), stored)

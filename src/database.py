@@ -354,7 +354,8 @@ def export_data() -> dict:
         recurring = [dict(r) for r in conn.execute(
             "SELECT amount_cents, type, category, wallet, note, day, start_month, last_applied "
             "FROM recurring ORDER BY id")]
-        settings = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM settings")}
+        settings = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM settings")
+                    if not r["key"].startswith("lock")}  # the PIN stays on this phone
     return {"app": "WhereMyMoney", "version": 1, "transactions": transactions,
             "recurring": recurring, "budgets": get_budgets(), "settings": settings,
             "categories": [dict(r) for r in list_categories()]}
@@ -400,6 +401,7 @@ def import_data(data: dict) -> None:
     validate_backup(data)
     fix = lambda w: w if w in WALLETS else "Wallet"
     with _db() as conn:
+        kept_lock = conn.execute("SELECT key, value FROM settings WHERE key LIKE 'lock%'").fetchall()
         for table in ("transactions", "recurring", "budgets", "settings"):
             conn.execute(f"DELETE FROM {table}")
         conn.executemany(
@@ -412,7 +414,10 @@ def import_data(data: dict) -> None:
             [(r["amount_cents"], r["type"], r["category"], fix(r.get("wallet")), r["note"], r["day"],
               r["start_month"], r["last_applied"]) for r in data["recurring"]])
         conn.executemany("INSERT INTO budgets (category, limit_cents) VALUES (?, ?)", list(data["budgets"].items()))
-        conn.executemany("INSERT INTO settings (key, value) VALUES (?, ?)", list(data["settings"].items()))
+        conn.executemany("INSERT INTO settings (key, value) VALUES (?, ?)",
+                         [kv for kv in data["settings"].items() if not kv[0].startswith("lock")])
+        conn.executemany("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                         [(r["key"], r["value"]) for r in kept_lock])  # importing never changes this phone's PIN
         if "categories" in data:
             conn.execute("DELETE FROM categories")
             conn.executemany("INSERT OR IGNORE INTO categories (name, icon, color, position) VALUES (?, ?, ?, ?)",
