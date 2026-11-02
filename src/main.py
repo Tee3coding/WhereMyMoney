@@ -1,14 +1,21 @@
 """WhereMyMoney: the Flet user interface. Run with: flet run src/main.py"""
 import calendar
+import json
 import math
 import re
 import time
 from datetime import datetime
 
 import flet as ft
+import flet_charts as fch
 
 import database as db
 import services as sv
+
+try:
+    from flet_android_notifications import FletAndroidNotifications, NotificationAction
+except ImportError:  # running on a computer without the Android-only package
+    FletAndroidNotifications = NotificationAction = None
 
 YELLOW = "#FFD93B"
 BG_DARK, BG_LIGHT = "#000000", "#F2F2F7"
@@ -58,9 +65,9 @@ def saved_theme():
 def badge(category, size=44, selected=False):
     return ft.Container(
         ft.Icon(CATEGORY_ICONS.get(category, ft.Icons.MORE_HORIZ), color="#5D4037", size=size * 0.5),
-        width=size, height=size, border_radius=size / 2, alignment=ft.alignment.center,
+        width=size, height=size, border_radius=size / 2, alignment=ft.Alignment.CENTER,
         bgcolor=CATEGORY_COLORS.get(category, "#E2E2E2"),
-        border=ft.border.all(3, ft.Colors.PRIMARY) if selected else None,
+        border=ft.Border.all(3, ft.Colors.PRIMARY) if selected else None,
     )
 
 
@@ -79,6 +86,8 @@ def card(*controls):
 
 
 def field(**kwargs):
+    if "prefix_text" in kwargs:  # Flet 1.0 takes a control here
+        kwargs["prefix"] = ft.Text(kwargs.pop("prefix_text"))
     return ft.TextField(filled=True, border_radius=12, border_width=0, **kwargs)
 
 
@@ -134,19 +143,19 @@ def main(page: ft.Page):
     app_title = ft.Text(page.title, size=20, weight=ft.FontWeight.BOLD)
 
     def toast(message):
-        page.open(ft.SnackBar(ft.Text(message)))
+        page.show_dialog(ft.SnackBar(ft.Text(message)))
 
     def confirm(title, text, on_yes, yes_label="Delete"):
         def yes(e):
-            page.close(dialog)
+            page.pop_dialog()
             on_yes()
 
         dialog = ft.AlertDialog(
             title=ft.Text(title), content=ft.Text(text),
-            actions=[ft.TextButton("Cancel", on_click=lambda e: page.close(dialog)),
+            actions=[ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
                      ft.TextButton(yes_label, on_click=yes)],
         )
-        page.open(dialog)
+        page.show_dialog(dialog)
 
     def prefix():
         return f"{sv.CURRENCY} "
@@ -172,9 +181,9 @@ def main(page: ft.Page):
     # ================= ENTRY SHEET (add + edit, category grid + keypad) =================
     KEYS = [["7", "8", "9", "date"], ["4", "5", "6", "+"], ["1", "2", "3", "-"], [".", "0", "⌫", "="]]
 
-    def open_entry(t=None):
+    def open_entry(t=None, kind="expense"):
         form = {
-            "kind": t["type"] if t else "expense", "category": t["category"] if t else db.CATEGORIES[0],
+            "kind": t["type"] if t else kind, "category": t["category"] if t else db.CATEGORIES[0],
             "wallet": t["wallet"] if t else "Wallet", "date": t["date"] if t else sv.today(),
             "text": f"{t['amount_cents'] / 100:.2f}".rstrip("0").rstrip(".") if t else "",
         }
@@ -228,7 +237,7 @@ def main(page: ft.Page):
                 form["date"] = ev.control.value.strftime("%Y-%m-%d")
                 show()
 
-            page.open(ft.DatePicker(first_date=datetime(2020, 1, 1), last_date=datetime(2100, 12, 31),
+            page.show_dialog(ft.DatePicker(first_date=datetime(2020, 1, 1), last_date=datetime(2100, 12, 31),
                                     value=datetime.strptime(form["date"], "%Y-%m-%d"), on_change=chosen))
 
         def key_button(key):
@@ -236,7 +245,7 @@ def main(page: ft.Page):
                               alignment=ft.MainAxisAlignment.CENTER)
                        if key == "date" else ft.Text("−" if key == "-" else key, size=20))
             return ft.Container(
-                content, height=50, expand=True, alignment=ft.alignment.center, border_radius=14,
+                content, height=50, expand=True, alignment=ft.Alignment.CENTER, border_radius=14,
                 bgcolor=ft.Colors.PRIMARY_CONTAINER if key in ("+", "-", "=", "date") else ft.Colors.SURFACE,
                 on_click=(lambda e: pick_date()) if key == "date" else (lambda e, k=key: press(k)))
 
@@ -252,17 +261,17 @@ def main(page: ft.Page):
                 db.update_transaction(t["id"], *args)
             else:
                 db.add_transaction(*args)
-            page.close(sheet)
+            page.pop_dialog()
             refresh()
             toast("Saved")
 
         def remove(e):
             confirm("Delete record?", "This can't be undone.", lambda: (
-                db.delete_transaction(t["id"]), page.close(sheet), refresh(), toast("Deleted")))
+                db.delete_transaction(t["id"]), page.pop_dialog(), refresh(), toast("Deleted")))
 
         def segmented(key, options):
             return ft.SegmentedButton(
-                selected={form[key]}, allow_multiple_selection=False, show_selected_icon=False,
+                selected=[form[key]], allow_multiple_selection=False, show_selected_icon=False,
                 on_change=lambda e: form.update({key: next(iter(e.control.selected))}),
                 segments=[ft.Segment(value=v, label=ft.Text(lbl), icon=ft.Icon(ic)) for v, lbl, ic in options])
 
@@ -278,15 +287,15 @@ def main(page: ft.Page):
                     grid,
                     ft.Row([segmented("wallet", [(w, w, WALLET_ICONS[w]) for w in db.WALLETS])],
                            alignment=ft.MainAxisAlignment.CENTER),
-                    ft.Container(display, alignment=ft.alignment.center_right, padding=ft.padding.only(right=8)),
+                    ft.Container(display, alignment=ft.Alignment.CENTER_RIGHT, padding=ft.Padding.only(right=8)),
                     memo, error,
                     ft.Column([ft.Row([key_button(k) for k in row], spacing=6) for row in KEYS], spacing=6),
                     ft.Row(buttons, spacing=8),
                 ], scroll=ft.ScrollMode.AUTO, spacing=10),
                 padding=16, height=(page.height or 800) * 0.92),
-            is_scroll_controlled=True, show_drag_handle=True, use_safe_area=True)
+            scrollable=True, show_drag_handle=True, use_safe_area=True)
         show()
-        page.open(sheet)
+        page.show_dialog(sheet)
 
     # ================= BUDGETS (dropdown) =================
     budget_cat = dropdown("Category", db.CATEGORIES[0], icon_options(db.CATEGORIES, CATEGORY_ICONS))
@@ -320,7 +329,7 @@ def main(page: ft.Page):
         refresh()
         toast("Budget removed")
 
-    budget_cat.on_change = load_budget
+    budget_cat.on_select = load_budget
     budgets_view = ft.Column(
         [
             card(budget_cat, budget_info, budget_amount, budget_error),
@@ -361,7 +370,7 @@ def main(page: ft.Page):
             return
         sv.CURRENCY = symbol
         db.set_setting("currency", symbol)
-        budget_amount.prefix_text = prefix()
+        budget_amount.prefix = ft.Text(prefix())
         refresh()
         toast("Currency saved")
 
@@ -409,7 +418,7 @@ def main(page: ft.Page):
             db.add_recurring(cents, kind_dd.value, cat.value, wal.value, (nt.value or "").strip(),
                              day_, sv.today())
             db.apply_recurring(sv.today())
-            page.close(dialog)
+            page.pop_dialog()
             refresh_recurring()
             refresh()
             toast("Recurring entry added")
@@ -418,54 +427,29 @@ def main(page: ft.Page):
             title=ft.Text("New recurring entry"),
             content=ft.Column([amt, kind_dd, cat, wal, day, nt, err], tight=True, width=320,
                               scroll=ft.ScrollMode.AUTO),
-            actions=[ft.TextButton("Cancel", on_click=lambda ev: page.close(dialog)),
+            actions=[ft.TextButton("Cancel", on_click=lambda ev: page.pop_dialog()),
                      ft.FilledButton("Add", on_click=save_rule)],
         )
-        page.open(dialog)
+        page.show_dialog(dialog)
 
     # ---- export / import (backup, to move your data to a new device) ----
     def backup_text():
         return sv.dump_backup(db.export_data())
 
-    def on_save_result(e: ft.FilePickerResultEvent):
-        if not e.path:
-            return
-        try:
-            with open(e.path, "w", encoding="utf-8") as f:
-                f.write(backup_text())
-            toast("Backup saved")
-        except OSError as problem:
-            toast(f"Could not save the file: {problem}")
-
-    def on_pick_result(e: ft.FilePickerResultEvent):
-        if not e.files:
-            return
-        if not e.files[0].path:
-            toast("Can't read that file here. Use 'Paste text' instead.")
-            return
-        try:
-            with open(e.files[0].path, encoding="utf-8") as f:
-                text = f.read()
-        except (OSError, UnicodeDecodeError) as problem:
-            toast(f"Could not read the file: {problem}")
-            return
-        start_import(text)
-
-    saver = ft.FilePicker(on_result=on_save_result)
-    opener = ft.FilePicker(on_result=on_pick_result)
-    page.overlay.extend([saver, opener])
+    saver, opener, clipboard = ft.FilePicker(), ft.FilePicker(), ft.Clipboard()
+    page.services.extend([saver, opener, clipboard])
 
     def apply_settings():
         """Re-reads every setting from the database (used after an import)."""
         sv.CURRENCY = db.get_setting("currency", "RM")
-        theme_seg.selected = {saved_theme()}
+        theme_seg.selected = [saved_theme()]
         page.theme_mode = THEME_MODES[saved_theme()]
         open_add_switch.value = db.get_setting("open_add", "0") == "1"
         apply_theme()
         name = db.get_setting("app_name", "WhereMyMoney")
         page.title = app_title.value = app_name_field.value = name
         currency_field.value = sv.CURRENCY
-        budget_amount.prefix_text = prefix()
+        budget_amount.prefix = ft.Text(prefix())
         refresh_category_controls()
         refresh_recurring()
         load_budget()
@@ -490,62 +474,88 @@ def main(page: ft.Page):
                 do_import, yes_label="Replace")
 
     def open_export(e):
-        def save_file(ev):
-            page.close(dialog)
+        async def save_file(ev):
+            page.pop_dialog()
             state["skip_lock"] = True  # the system file dialog pauses the app: don't lock for that
-            saver.save_file(file_name=f"wheremymoney-backup-{sv.today()}.json", allowed_extensions=["json"])
+            data = backup_text()
+            path = await saver.save_file(file_name=f"wheremymoney-backup-{sv.today()}.json",
+                                         allowed_extensions=["json"], src_bytes=data.encode("utf-8"))
+            if not path:
+                return
+            if page.platform not in (ft.PagePlatform.ANDROID, ft.PagePlatform.IOS):  # computers: we write the file
+                try:
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(data)
+                except OSError as problem:
+                    toast(f"Could not save the file: {problem}")
+                    return
+            toast("Backup saved")
 
-        def copy_text(ev):
-            page.close(dialog)
-            page.set_clipboard(backup_text())
+        async def copy_text(ev):
+            page.pop_dialog()
+            await clipboard.set(backup_text())
             toast("Backup copied. Paste it into a note or message to yourself.")
 
         dialog = ft.AlertDialog(
             title=ft.Text("Export data"),
             content=ft.Text("Creates a backup of everything: transactions, budgets, recurring entries "
                             "and settings. Save it as a file, or copy it as text."),
-            actions=[ft.TextButton("Cancel", on_click=lambda ev: page.close(dialog)),
+            actions=[ft.TextButton("Cancel", on_click=lambda ev: page.pop_dialog()),
                      ft.OutlinedButton("Copy as text", on_click=copy_text),
                      ft.FilledButton("Save file", on_click=save_file)],
         )
-        page.open(dialog)
+        page.show_dialog(dialog)
 
     def open_paste():
         box = field(label="Paste backup text here", multiline=True, min_lines=4, max_lines=8)
 
         def go(ev):
-            page.close(dialog)
+            page.pop_dialog()
             start_import(box.value)
 
         dialog = ft.AlertDialog(
             title=ft.Text("Paste backup"), content=ft.Container(box, width=320),
-            actions=[ft.TextButton("Cancel", on_click=lambda ev: page.close(dialog)),
+            actions=[ft.TextButton("Cancel", on_click=lambda ev: page.pop_dialog()),
                      ft.FilledButton("Import", on_click=go)],
         )
-        page.open(dialog)
+        page.show_dialog(dialog)
 
     def open_import(e):
-        def choose_file(ev):
-            page.close(dialog)
+        async def choose_file(ev):
+            page.pop_dialog()
             state["skip_lock"] = True
-            opener.pick_files(dialog_title="Choose backup file", allowed_extensions=["json"])
+            files = await opener.pick_files(dialog_title="Choose backup file", allowed_extensions=["json"],
+                                            with_data=True)
+            if not files:
+                return
+            picked = files[0]
+            try:
+                if picked.path:
+                    with open(picked.path, encoding="utf-8") as f:
+                        text = f.read()
+                else:
+                    text = bytes(picked.bytes).decode("utf-8")
+            except (OSError, UnicodeDecodeError, TypeError) as problem:
+                toast(f"Could not read the file: {problem}. Use 'Paste text' instead.")
+                return
+            start_import(text)
 
         def paste_text(ev):
-            page.close(dialog)
+            page.pop_dialog()
             open_paste()
 
         dialog = ft.AlertDialog(
             title=ft.Text("Import data"),
             content=ft.Text("Choose a backup file made with Export data, or paste the backup text. "
                             "Importing replaces all data currently in the app."),
-            actions=[ft.TextButton("Cancel", on_click=lambda ev: page.close(dialog)),
+            actions=[ft.TextButton("Cancel", on_click=lambda ev: page.pop_dialog()),
                      ft.OutlinedButton("Paste text", on_click=paste_text),
                      ft.FilledButton("Choose file", on_click=choose_file)],
         )
-        page.open(dialog)
+        page.show_dialog(dialog)
 
     theme_seg = ft.SegmentedButton(
-        selected={saved_theme()}, allow_multiple_selection=False, show_selected_icon=False, on_change=set_theme,
+        selected=[saved_theme()], allow_multiple_selection=False, show_selected_icon=False, on_change=set_theme,
         segments=[ft.Segment(value="system", label=ft.Text("Phone"), icon=ft.Icon(ft.Icons.BRIGHTNESS_AUTO)),
                   ft.Segment(value="light", label=ft.Text("Light"), icon=ft.Icon(ft.Icons.LIGHT_MODE)),
                   ft.Segment(value="dark", label=ft.Text("Dark"), icon=ft.Icon(ft.Icons.DARK_MODE))])
@@ -573,7 +583,7 @@ def main(page: ft.Page):
 
         def choose(month):
             state["month"] = month
-            page.close(dialog)
+            page.pop_dialog()
             refresh()
 
         def build():
@@ -581,7 +591,7 @@ def main(page: ft.Page):
             grid.controls = [
                 ft.Container(
                     ft.Text(MONTHS[i], color=BLACK if f"{pick['year']}-{i + 1:02d}" == state["month"] else None),
-                    width=72, height=44, alignment=ft.alignment.center, border_radius=12,
+                    width=72, height=44, alignment=ft.Alignment.CENTER, border_radius=12,
                     bgcolor=YELLOW if f"{pick['year']}-{i + 1:02d}" == state["month"]
                     else ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE),
                     on_click=lambda e, m=f"{pick['year']}-{i + 1:02d}": choose(m))
@@ -599,12 +609,12 @@ def main(page: ft.Page):
                         ft.IconButton(ft.Icons.CHEVRON_RIGHT, on_click=lambda e: shift_year(1))],
                        alignment=ft.MainAxisAlignment.CENTER), grid], tight=True, width=300),
             actions=[ft.TextButton("This month", on_click=lambda e: choose(sv.today()[:7])),
-                     ft.TextButton("Close", on_click=lambda e: page.close(dialog))])
+                     ft.TextButton("Close", on_click=lambda e: page.pop_dialog())])
         build()
-        page.open(dialog)
+        page.show_dialog(dialog)
 
     def on_swipe(e):  # swipe left = next month, swipe right = previous month
-        velocity = e.velocity_x or 0
+        velocity = e.primary_velocity or 0
         if velocity < -300:
             change_month(1)
         elif velocity > 300:
@@ -644,8 +654,8 @@ def main(page: ft.Page):
                                ft.Text(tip, size=14, color=BLACK, weight=ft.FontWeight.W_500)], tight=True, spacing=6)
                        if on else ft.Icon(icon, size=20, color=color or ft.Colors.ON_SURFACE))
             return ft.Container(content, width=None if on else 40, height=40, border_radius=20,
-                                alignment=ft.alignment.center, tooltip=tip,
-                                padding=ft.padding.symmetric(horizontal=14) if on else None,
+                                alignment=ft.Alignment.CENTER, tooltip=tip,
+                                padding=ft.Padding.symmetric(horizontal=14) if on else None,
                                 bgcolor=YELLOW if on else None,
                                 on_click=lambda e, k=key, v=value: toggle_filter(k, v))
 
@@ -661,7 +671,7 @@ def main(page: ft.Page):
             return ft.Container(
                 ft.Row([ft.Icon(CATEGORY_ICONS.get(name, I.MORE_HORIZ), size=16, color=BLACK if on else None),
                         ft.Text(name, size=13, color=BLACK if on else None)], tight=True, spacing=6),
-                padding=ft.padding.symmetric(horizontal=12, vertical=8), border_radius=20,
+                padding=ft.Padding.symmetric(horizontal=12, vertical=8), border_radius=20,
                 bgcolor=YELLOW if on else ft.Colors.SURFACE,
                 on_click=lambda e, v=value: toggle_filter("category", v))
         chip_row.controls = [chip(n) for n in [ALL] + db.CATEGORIES]
@@ -689,7 +699,7 @@ def main(page: ft.Page):
 
     def yellow_plus(on_click):
         return ft.Container(ft.Icon(ft.Icons.ADD, color=BLACK), width=48, height=48, border_radius=24,
-                            bgcolor=YELLOW, alignment=ft.alignment.center, on_click=on_click)
+                            bgcolor=YELLOW, alignment=ft.Alignment.CENTER, on_click=on_click)
 
     # ================= HOME =================
     home_month = ft.Text(size=26, weight=ft.FontWeight.W_500)
@@ -707,7 +717,7 @@ def main(page: ft.Page):
                 stat_cell("Income", h_inc, ft.Icons.ARROW_DOWNWARD, ft.Colors.GREEN), divider(),
                 stat_cell("Balance", h_bal)]),
         ft.Divider(height=1),
-        ft.Container(ft.Row([budget_hint, ft.Icon(ft.Icons.CHEVRON_RIGHT)]), padding=ft.padding.symmetric(vertical=6),
+        ft.Container(ft.Row([budget_hint, ft.Icon(ft.Icons.CHEVRON_RIGHT)]), padding=ft.Padding.symmetric(vertical=6),
                      on_click=lambda e: open_budget_page()))
     home_view = ft.Column([home_header, home_filters, search_panel, summary_card, home_list, ft.Container(height=100)],
                           scroll=ft.ScrollMode.AUTO, spacing=12, expand=True)
@@ -725,7 +735,7 @@ def main(page: ft.Page):
                 ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_size=20, tooltip="Edit",
                               on_click=lambda e, t=t: open_entry(t))],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
-            padding=ft.padding.symmetric(horizontal=12, vertical=10), ink=True,
+            padding=ft.Padding.symmetric(horizontal=12, vertical=10), ink=True,
             on_click=lambda e, t=t: open_entry(t))
 
     def home_rows():
@@ -765,17 +775,17 @@ def main(page: ft.Page):
             refresh()
 
         return ft.Container(ft.Row([text, ft.Icon(ft.Icons.SWAP_HORIZ, size=16, color=BLACK)], tight=True, spacing=4),
-                            bgcolor=YELLOW, border_radius=20, padding=ft.padding.symmetric(horizontal=14, vertical=6),
+                            bgcolor=YELLOW, border_radius=20, padding=ft.Padding.symmetric(horizontal=14, vertical=6),
                             on_click=toggle)
 
     rep_month = ft.Text(size=26, weight=ft.FontWeight.W_500)
     line_total, line_avg = ft.Text(size=18), ft.Text(size=13, color=ft.Colors.OUTLINE)
-    line_chart = ft.LineChart(
+    line_chart = fch.LineChart(
         data_series=[], height=220, min_x=1, max_x=31, min_y=0, max_y=100, interactive=False,
-        horizontal_grid_lines=ft.ChartGridLines(interval=20, color=ft.Colors.with_opacity(0.35, YELLOW), width=1,
+        horizontal_grid_lines=fch.ChartGridLines(interval=20, color=ft.Colors.with_opacity(0.35, YELLOW), width=1,
                                                 dash_pattern=[4, 4]),
-        left_axis=ft.ChartAxis(labels=[], labels_size=44), bottom_axis=ft.ChartAxis(labels=[], labels_size=26))
-    pie = ft.PieChart(sections=[], sections_space=1, center_space_radius=0)
+        left_axis=fch.ChartAxis(labels=[], label_size=44), bottom_axis=fch.ChartAxis(labels=[], label_size=26))
+    pie = fch.PieChart(sections=[], sections_space=1, center_space_radius=0)
     pie_legend, top_list = ft.Column(spacing=8), ft.Column(spacing=10)
     reports_view = ft.Column(
         [ft.Row([month_button(rep_month)], alignment=ft.MainAxisAlignment.CENTER),
@@ -819,7 +829,7 @@ def main(page: ft.Page):
                 ft.Row([badge(r["name"], 40), ft.Text(r["name"], size=16, expand=True),
                         ft.Icon(ft.Icons.EDIT_OUTLINED, color=ft.Colors.OUTLINE)],
                        spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                padding=ft.padding.symmetric(horizontal=8, vertical=8), ink=True,
+                padding=ft.Padding.symmetric(horizontal=8, vertical=8), ink=True,
                 on_click=lambda e, n=r["name"]: edit_category(n))
             for r in db.list_categories()]
 
@@ -845,17 +855,17 @@ def main(page: ft.Page):
         def draw():
             preview.controls = [ft.Container(
                 ft.Icon(ICON_CHOICES.get(pick["icon"], I.MORE_HORIZ), color="#5D4037", size=30), width=60, height=60,
-                border_radius=30, bgcolor=pick["color"], alignment=ft.alignment.center)]
+                border_radius=30, bgcolor=pick["color"], alignment=ft.Alignment.CENTER)]
             icon_row.controls = [
                 ft.Container(ft.Icon(icon, size=22), width=42, height=42, border_radius=10,
-                             alignment=ft.alignment.center,
+                             alignment=ft.Alignment.CENTER,
                              bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE),
-                             border=ft.border.all(2, YELLOW) if key == pick["icon"] else None,
+                             border=ft.Border.all(2, YELLOW) if key == pick["icon"] else None,
                              on_click=lambda e, k=key: choose("icon", k))
                 for key, icon in ICON_CHOICES.items()]
             color_row.controls = [
                 ft.Container(width=32, height=32, border_radius=16, bgcolor=c,
-                             border=ft.border.all(3, ft.Colors.ON_SURFACE) if c == pick["color"] else None,
+                             border=ft.Border.all(3, ft.Colors.ON_SURFACE) if c == pick["color"] else None,
                              on_click=lambda e, c=c: choose("color", c))
                 for c in COLOR_CHOICES]
             page.update()
@@ -867,10 +877,10 @@ def main(page: ft.Page):
                 error.value = str(problem)
                 page.update()
                 return
-            page.close(dialog)
+            page.pop_dialog()
             after_category_change()
 
-        actions = [ft.TextButton("Cancel", on_click=lambda e: page.close(dialog)),
+        actions = [ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
                    ft.FilledButton("Save", on_click=lambda e: run(
                        (lambda: db.update_category(name, name_box.value, pick["icon"], pick["color"])) if current
                        else (lambda: db.add_category(name_box.value, pick["icon"], pick["color"]))))]
@@ -882,7 +892,7 @@ def main(page: ft.Page):
                                color_row, error], tight=True, width=320, scroll=ft.ScrollMode.AUTO),
             actions=actions)
         draw()
-        page.open(dialog)
+        page.show_dialog(dialog)
 
     def open_category_page():
         build_category_rows()
@@ -900,18 +910,18 @@ def main(page: ft.Page):
 
         def go(ev):
             app_name_field.value = box.value
-            page.close(dialog)
+            page.pop_dialog()
             save_app_name(None)
 
         dialog = ft.AlertDialog(title=ft.Text("Your name"), content=ft.Container(box, width=300),
-                                actions=[ft.TextButton("Cancel", on_click=lambda ev: page.close(dialog)),
+                                actions=[ft.TextButton("Cancel", on_click=lambda ev: page.pop_dialog()),
                                          ft.FilledButton("Save", on_click=go)])
-        page.open(dialog)
+        page.show_dialog(dialog)
 
     def tile(icon, color, text, on_click):
         return ft.Container(
             ft.Column([ft.Container(ft.Icon(icon, color="#FFFFFF", size=26), width=50, height=50, border_radius=14,
-                                    bgcolor=color, alignment=ft.alignment.center),
+                                    bgcolor=color, alignment=ft.Alignment.CENTER),
                        ft.Text(text, size=13, text_align=ft.TextAlign.CENTER)],
                       horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6),
             width=96, padding=6, on_click=on_click)
@@ -942,7 +952,8 @@ def main(page: ft.Page):
                                                card(label("CURRENCY"), currency_field),
                                                card(label("LAUNCH"), open_add_switch,
                                                     ft.Text("Opens the new-record panel straight away, so one tap "
-                                                            "on the app icon is enough to add a record.", size=12)))),
+                                                            "on the app icon is enough to add a record.", size=12)),
+                                               card(label("QUICK ADD"), notify_switch, notify_note))),
                    tile(ft.Icons.FOLDER_OPEN, "#5AA9E6", "Export Data", open_export),
                    tile(ft.Icons.DOWNLOAD, "#4FB477", "Import Data", open_import)),
          ft.Container(height=100)],
@@ -965,7 +976,7 @@ def main(page: ft.Page):
     def lock_key(k):
         if k == "":
             return ft.Container(width=72, height=72)
-        return ft.Container(ft.Text(k, size=26), width=72, height=72, border_radius=36, alignment=ft.alignment.center,
+        return ft.Container(ft.Text(k, size=26), width=72, height=72, border_radius=36, alignment=ft.Alignment.CENTER,
                             bgcolor=None if k == "⌫" else ft.Colors.SURFACE, on_click=lambda e, k=k: lock_press(k))
 
     def lock_press(k):
@@ -1001,16 +1012,15 @@ def main(page: ft.Page):
                 ft.Column([ft.Row([lock_key(k) for k in row], alignment=ft.MainAxisAlignment.CENTER, spacing=18)
                            for row in (["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["", "0", "⌫"])], spacing=14),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER, spacing=16),
-            alignment=ft.alignment.center, expand=True),
+            alignment=ft.Alignment.CENTER, expand=True),
         expand=True, visible=False)
 
     def lock():
         lock_state["pin"] = ""
         lock_msg.value = ""
         draw_dots()
-        for c in list(page.overlay):  # close open dialogs/sheets so nothing stays visible over the lock screen
-            if isinstance(c, (ft.AlertDialog, ft.BottomSheet, ft.DatePicker, ft.SnackBar)):
-                c.open = False
+        while page.pop_dialog():  # close open dialogs/sheets so nothing stays visible over the lock screen
+            pass
         main_area.visible = False
         lock_screen.visible = True
         page.bottom_appbar.visible = False
@@ -1023,8 +1033,9 @@ def main(page: ft.Page):
         page.bottom_appbar.visible = True
         build_nav()
         refresh()
-        if state.pop("open_after_unlock", False):
-            open_entry()
+        kind = state.pop("open_after_unlock", None)
+        if kind:
+            open_entry(kind=kind)
 
     def on_lifecycle(e):  # lock again whenever the app goes to the background
         if e.state == ft.AppLifecycleState.RESUME:
@@ -1044,7 +1055,7 @@ def main(page: ft.Page):
         fields = ([old] if mode != "create" else []) + ([new, again] if mode != "disable" else [])
 
         def cancel(e=None):
-            page.close(dialog)
+            page.pop_dialog()
             sync_lock_controls()
 
         def ok(e):
@@ -1057,7 +1068,7 @@ def main(page: ft.Page):
             else:
                 db.set_setting("lock", "" if mode == "disable" else sv.hash_pin(new.value))
                 db.set_setting("lock_fails", "0")
-                page.close(dialog)
+                page.pop_dialog()
                 sync_lock_controls()
                 toast("App lock turned off" if mode == "disable" else "PIN saved")
                 return
@@ -1065,9 +1076,9 @@ def main(page: ft.Page):
 
         dialog = ft.AlertDialog(
             title=ft.Text({"create": "Create a PIN", "change": "Change PIN", "disable": "Turn off App Lock"}[mode]),
-            content=ft.Column(fields + [error], tight=True, width=300), on_dismiss=cancel,
+            content=ft.Column(fields + [error], tight=True, width=300), on_dismiss=lambda e: sync_lock_controls(),
             actions=[ft.TextButton("Cancel", on_click=cancel), ft.FilledButton("OK", on_click=ok)])
-        page.open(dialog)
+        page.show_dialog(dialog)
 
     lock_switch = ft.Switch(label="Ask for a PIN when opening the app", value=lock_enabled(),
                             on_change=lambda e: pin_dialog("create" if e.control.value else "disable"))
@@ -1087,6 +1098,51 @@ def main(page: ft.Page):
                     "If you forget the PIN, the only way in is to clear the app's data, which erases your records, "
                     "so use Export Data regularly. The lock keeps other people out of the app; "
                     "it does not encrypt the data file.", size=12)))
+
+    # ================= QUICK-ADD NOTIFICATION (Android only) =================
+    NOTIFY_ID = 1
+    quick = {"service": None}
+
+    def on_notification_tap(e):  # tap on the notification itself or on one of its two buttons
+        data = json.loads(e.data or "{}")
+        kind = "income" if data.get("action_id") == "income" else "expense"
+        if lock_enabled() and lock_screen.visible:
+            state["open_after_unlock"] = kind  # opens after the PIN is entered
+        else:
+            open_entry(kind=kind)
+
+    async def show_quick_add():
+        service = quick["service"]
+        if not service or not await service.request_permissions():
+            return False
+        await service.show_notification(
+            notification_id=NOTIFY_ID, title="WhereMyMoney", body="Tap to add a record",
+            actions=[NotificationAction("expense", "Add expense", cancel_notification=False),
+                     NotificationAction("income", "Add income", cancel_notification=False)],
+            channel_id="quick_add", channel_name="Quick add",
+            channel_description="Keeps a shortcut for adding records in your notification bar",
+            importance="low", play_sound=False, enable_vibration=False, silent=True, only_alert_once=True,
+            ongoing=True, auto_cancel=False)
+        return True
+
+    async def on_notify_switch(e):
+        if e.control.value:
+            ok = await show_quick_add()
+            if not ok:
+                e.control.value = False
+                toast("Couldn't show it. Check that notifications are allowed for this app.")
+            db.set_setting("device_quick_notify", "1" if ok else "0")
+        else:
+            db.set_setting("device_quick_notify", "0")
+            if quick["service"]:
+                await quick["service"].cancel(NOTIFY_ID)
+        page.update()
+
+    notify_switch = ft.Switch(label="Notification shortcut", value=db.get_setting("device_quick_notify", "0") == "1",
+                              disabled=page.platform != ft.PagePlatform.ANDROID, on_change=on_notify_switch)
+    notify_note = ft.Text("Keeps a quiet notification in your notification bar with Add expense and Add income "
+                          "buttons (Android only). On newer Android versions you can swipe it away; it comes "
+                          "back the next time you open the app.", size=12)
 
     # ================= SUB-PAGES + NAVIGATION =================
     body = ft.Container(expand=True, padding=16)
@@ -1168,19 +1224,19 @@ def main(page: ft.Page):
         line_total.value = f"{pill_texts['line'].value}: {sv.money(total_line)}"
         line_avg.value = f"Average per {'month' if year_mode else 'day'}: {sv.money(total_line // divisor)}"
         step = nice_step(max(list(daily.values()) + [0]) / 100 / 5)
-        line_chart.data_series = [ft.LineChartData(
-            data_points=[ft.LineChartDataPoint(d, daily.get(d, 0) / 100) for d in range(1, days + 1)],
+        line_chart.data_series = [fch.LineChartData(
+            points=[fch.LineChartDataPoint(d, daily.get(d, 0) / 100) for d in range(1, days + 1)],
             color=YELLOW, stroke_width=3, curved=False)]
         line_chart.min_x, line_chart.max_x, line_chart.max_y = 1, days, step * 5
         line_chart.horizontal_grid_lines.interval = step
-        line_chart.left_axis.labels = [ft.ChartAxisLabel(value=i * step, label=ft.Text(f"{i * step:g}", size=11,
+        line_chart.left_axis.labels = [fch.ChartAxisLabel(value=i * step, label=ft.Text(f"{i * step:g}", size=11,
                                        color=ft.Colors.OUTLINE)) for i in range(6)]
-        line_chart.bottom_axis.labels = [ft.ChartAxisLabel(value=d, label=ft.Text(MONTHS[d - 1] if year_mode else str(d), size=11,
+        line_chart.bottom_axis.labels = [fch.ChartAxisLabel(value=d, label=ft.Text(MONTHS[d - 1] if year_mode else str(d), size=11,
                                          color=ft.Colors.OUTLINE)) for d in range(1, days + 1, 2 if year_mode else 3)]
 
         rows = db.category_totals(period, r_state["pie"], wallet)
         total = sum(r["total"] for r in rows)
-        pie.sections = [ft.PieChartSection(r["total"] / 100, radius=100, color=PIE_COLORS[i % len(PIE_COLORS)],
+        pie.sections = [fch.PieChartSection(r["total"] / 100, radius=100, color=PIE_COLORS[i % len(PIE_COLORS)],
                                            title=f"{r['total'] * 100 / total:.1f}%",
                                            title_style=ft.TextStyle(size=12, color="#FFFFFF"))
                         for i, r in enumerate(rows)]
@@ -1196,7 +1252,7 @@ def main(page: ft.Page):
                     ft.Text(sv.money(t["amount_cents"]))], spacing=12)
             for t in top] or [ft.Container(ft.Text("Please add a bill", size=17,
                                                    style=ft.TextStyle(decoration=ft.TextDecoration.UNDERLINE)),
-                                           alignment=ft.alignment.center, padding=24)]
+                                           alignment=ft.Alignment.CENTER, padding=24)]
 
         balances = db.wallet_balances()
         assets = sum(v for v in balances.values() if v > 0)
@@ -1204,12 +1260,12 @@ def main(page: ft.Page):
         net_text.value, assets_text.value, debts_text.value = sv.money(assets - debts), sv.money(assets), sv.money(debts)
         account_rows.controls = [
             ft.Row([ft.Container(ft.Icon(WALLET_ICONS[name], color=BLACK), width=44, height=44, border_radius=22,
-                                 bgcolor=YELLOW, alignment=ft.alignment.center),
+                                 bgcolor=YELLOW, alignment=ft.Alignment.CENTER),
                     ft.Text(name, size=17, expand=True), ft.Text(sv.money(bal), size=17)], spacing=14)
             for name, bal in balances.items()]
         page.update()
 
-    page.bottom_appbar = ft.BottomAppBar(content=nav_row, shape=ft.NotchShape.CIRCULAR, notch_margin=6,
+    page.bottom_appbar = ft.BottomAppBar(content=nav_row, shape=ft.CircularRectangleNotchShape(), notch_margin=6,
                                          bgcolor=ft.Colors.SURFACE, height=72, padding=0)
     page.floating_action_button = ft.FloatingActionButton(
         icon=ft.Icons.ADD, bgcolor=YELLOW, foreground_color=BLACK, shape=ft.CircleBorder(),
@@ -1223,9 +1279,13 @@ def main(page: ft.Page):
     draw_dots()
     if lock_enabled():
         lock()
-        state["open_after_unlock"] = open_add_switch.value
+        state["open_after_unlock"] = "expense" if open_add_switch.value else None
     elif open_add_switch.value:
         open_entry()
+    if FletAndroidNotifications and page.platform == ft.PagePlatform.ANDROID:  # last, so a replayed tap finds the UI
+        quick["service"] = FletAndroidNotifications(on_notification_tap=on_notification_tap)
+        if db.get_setting("device_quick_notify", "0") == "1":
+            page.run_task(show_quick_add)
 
 
-ft.app(target=main)
+ft.run(main)
