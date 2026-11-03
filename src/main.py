@@ -13,9 +13,9 @@ import database as db
 import services as sv
 
 try:
-    from flet_android_notifications import FletAndroidNotifications, NotificationAction
+    from flet_android_notifications import FletAndroidNotifications, NotificationAction, NotificationActionInput
 except ImportError:  # running on a computer without the Android-only package
-    FletAndroidNotifications = NotificationAction = None
+    FletAndroidNotifications = NotificationAction = NotificationActionInput = None
 
 YELLOW = "#FFD93B"
 BG_DARK, BG_LIGHT = "#000000", "#F2F2F7"
@@ -953,7 +953,7 @@ def main(page: ft.Page):
                                                card(label("LAUNCH"), open_add_switch,
                                                     ft.Text("Opens the new-record panel straight away, so one tap "
                                                             "on the app icon is enough to add a record.", size=12)),
-                                               card(label("QUICK ADD"), notify_switch, notify_note))),
+                                               card(label("QUICK ADD"), notify_switch, reply_switch, notify_note))),
                    tile(ft.Icons.FOLDER_OPEN, "#5AA9E6", "Export Data", open_export),
                    tile(ft.Icons.DOWNLOAD, "#4FB477", "Import Data", open_import)),
          ft.Container(height=100)],
@@ -1106,19 +1106,43 @@ def main(page: ft.Page):
     def on_notification_tap(e):  # tap on the notification itself or on one of its two buttons
         data = json.loads(e.data or "{}")
         kind = "income" if data.get("action_id") == "income" else "expense"
+        typed = (data.get("input") or "").strip()
+        if typed:  # typed straight into the notification: save it without opening anything
+            save_quick_reply(typed, kind)
+            return
         if lock_enabled() and lock_screen.visible:
             state["open_after_unlock"] = kind  # opens after the PIN is entered
         else:
             open_entry(kind=kind)
 
-    async def show_quick_add():
+    def save_quick_reply(text, kind):
+        try:
+            cents, category, wallet, memo = sv.parse_quick_entry(text, db.CATEGORIES)
+        except ValueError as problem:
+            body = f"Couldn't save: {problem}"
+        else:
+            category = category or ("Other" if "Other" in db.CATEGORIES else db.CATEGORIES[0])
+            db.add_transaction(cents, kind, category, wallet or "Wallet", sv.today(), memo)
+            refresh()
+            body = f"Saved {'+' if kind == 'income' else '-'}{sv.money(cents)} · {category}" + (f" · {memo}" if memo else "")
+        page.run_task(show_quick_add, body)  # also clears the "sending" spinner on the reply box
+
+    def reply_mode():
+        return db.get_setting("device_quick_reply", "0") == "1"
+
+    def quick_action(action_id, title):
+        if reply_mode():  # type the record into the notification itself; the app does not open
+            return NotificationAction(action_id, title, cancel_notification=False, shows_user_interface=False,
+                                      inputs=[NotificationActionInput(label="e.g. 12.50 food lunch")])
+        return NotificationAction(action_id, title, cancel_notification=False)
+
+    async def show_quick_add(body="Tap to add a record"):
         service = quick["service"]
         if not service or not await service.request_permissions():
             return False
         await service.show_notification(
-            notification_id=NOTIFY_ID, title="WhereMyMoney", body="Tap to add a record",
-            actions=[NotificationAction("expense", "Add expense", cancel_notification=False),
-                     NotificationAction("income", "Add income", cancel_notification=False)],
+            notification_id=NOTIFY_ID, title="WhereMyMoney", body=body,
+            actions=[quick_action("expense", "Add expense"), quick_action("income", "Add income")],
             channel_id="quick_add", channel_name="Quick add",
             channel_description="Keeps a shortcut for adding records in your notification bar",
             importance="low", play_sound=False, enable_vibration=False, silent=True, only_alert_once=True,
@@ -1140,9 +1164,19 @@ def main(page: ft.Page):
 
     notify_switch = ft.Switch(label="Notification shortcut", value=db.get_setting("device_quick_notify", "0") == "1",
                               disabled=page.platform != ft.PagePlatform.ANDROID, on_change=on_notify_switch)
+    async def on_reply_switch(e):
+        db.set_setting("device_quick_reply", "1" if e.control.value else "0")
+        if quick["service"] and db.get_setting("device_quick_notify", "0") == "1":
+            await show_quick_add()  # swap the buttons right away
+        page.update()
+
+    reply_switch = ft.Switch(label="Type records into the notification", value=reply_mode(),
+                             disabled=page.platform != ft.PagePlatform.ANDROID, on_change=on_reply_switch)
     notify_note = ft.Text("Keeps a quiet notification in your notification bar with Add expense and Add income "
                           "buttons (Android only). On newer Android versions you can swipe it away; it comes "
-                          "back the next time you open the app.", size=12)
+                          "back the next time you open the app. With 'Type records into the notification', the two buttons "
+                          "open a typing box instead of the app: type for example '12.50 food lunch' (amount, then "
+                          "an optional category, bank or wallet, and a memo).", size=12)
 
     # ================= SUB-PAGES + NAVIGATION =================
     body = ft.Container(expand=True, padding=16)

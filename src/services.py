@@ -87,3 +87,29 @@ def check_pin(pin: str, stored: str) -> bool:
     if "$" not in (stored or ""):
         return False
     return hmac.compare_digest(hash_pin(pin, stored.split("$")[0]), stored)
+
+
+def parse_quick_entry(text: str, categories, wallets=("Bank", "Wallet")):
+    """'12.50 food lunch bank' -> (cents, category or None, wallet or None, memo).
+    The first number (or sum like 10+5) is the amount; a word matching a category or account picks it;
+    everything else becomes the memo."""
+    cents, category, wallet, memo = None, None, None, []
+    for token in (text or "").split():
+        word = token.lower().lstrip("#")
+        if cents is None:
+            try:
+                cents = parse_amount(token)
+                continue
+            except ValueError:
+                pass
+        match = (next((c for c in categories if c.lower() == word), None)
+                 or next((c for c in categories if len(word) >= 3 and c.lower().startswith(word)), None))
+        if category is None and match:
+            category = match
+        elif wallet is None and word in [w.lower() for w in wallets]:
+            wallet = next(w for w in wallets if w.lower() == word)
+        else:
+            memo.append(token)
+    if cents is None:
+        raise ValueError("start with the amount, e.g. 12.50 food lunch")
+    return cents, category, wallet, " ".join(memo)
