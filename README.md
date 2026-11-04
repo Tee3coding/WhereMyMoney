@@ -23,6 +23,37 @@ The in-app name (top bar) can be changed any time in Settings.
 Settings > Data > **Export data** (save the file or copy the text), send it to the new phone, then
 Settings > Data > **Import data** there. Importing replaces everything in the app with the backup.
 
+## Build the Android APK
+Needs Python 3.10 or newer, Android Studio (for the Android SDK) and JDK 17.
+Use a **fresh virtual environment**, then `pip install -r requirements.txt`.
+
+1. **Export your data first** (Mine > Export Data) if the app is already installed, and keep a copy of your
+   current working APK in case you want to go back.
+2. If you built before, delete the old `build` folder (it can hold outdated packages).
+3. From the project folder: `python tools/build_apk.py`
+4. Install the APK it prints at the end (keeps your data): `adb install -r "<path it shows>"`
+
+`tools/build_apk.py` does three things in order: `flet build apk`, `tools/patch_android.py` (adds the native
+quick-add code to the generated Android project), and `flutter build apk` with the settings Flet normally passes
+(`SERIOUS_PYTHON_VERSION`, `SERIOUS_PYTHON_SITE_PACKAGES`, `SERIOUS_PYTHON_APP`). Running Flutter by hand without
+those fails with "SERIOUS_PYTHON_SITE_PACKAGES environment variable is not set".
+
+- It uses the Flutter that Flet downloads (`~/flutter/3.44.8`). A different Flutter on your PATH is not used.
+- `--skip-flet` reuses the project from the last run (after the first run).
+- `--dry-run` only prints the commands.
+- Icon: `src/assets/icon.png`. Home screen name: `product` in `pyproject.toml`.
+
+## How the quick-add notification works
+- Turn it on in Mine > Preferences > Quick add. The app writes `quick_config.json` (categories, currency, on/off).
+- The Android side (`tools/android/*.java`, added by `patch_android.py`) shows a quiet notification with
+  Expense, Income and Open app buttons. Expense and Income open a small form over whatever app is open.
+- The form appends the record to `quick_inbox.jsonl`; the app imports it when it is opened or comes back to the front.
+- The form never opens the database itself, so it cannot damage your data.
+
+## Moving to a new phone
+Settings > Data > **Export data** (save the file or copy the text), send it to the new phone, then
+Settings > Data > **Import data** there. Importing replaces everything in the app with the backup.
+
 ## Build the Android APK (3 extra steps because of the notification package)
 Needs Python 3.11 or newer (3.12 or 3.13 recommended), Android Studio (for the Android SDK) and JDK 17.
 Use a **fresh virtual environment**, then `pip install -r requirements.txt`.

@@ -1,12 +1,11 @@
 [project]
 name = "wheremymoney"
-version = "0.8.0"
+version = "0.9.0"
 description = "Personal income and expense tracker"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "flet==1.0.5",
     "flet-charts==1.0.5",
-    "flet-android-notifications==0.12.0",
 ]
 
 [tool.flet]
@@ -16,9 +15,6 @@ org = "com.wheremymoney"
 bundle_id = "com.wheremymoney"   # the exact app ID
 company = "WhereMyMoney"
 copyright = "Copyright (C) 2026 WhereMyMoney"
-
-[tool.flet.android.permission]
-"android.permission.POST_NOTIFICATIONS" = true   # for the quick-add notification
 
 [tool.flet.app]
 path = "src"

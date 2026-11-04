@@ -1,6 +1,5 @@
 """WhereMyMoney: the Flet user interface. Run with: flet run src/main.py"""
 import calendar
-import json
 import math
 import re
 import time
@@ -11,11 +10,6 @@ import flet_charts as fch
 
 import database as db
 import services as sv
-
-try:
-    from flet_android_notifications import FletAndroidNotifications, NotificationAction, NotificationActionInput
-except ImportError:  # running on a computer without the Android-only package
-    FletAndroidNotifications = NotificationAction = NotificationActionInput = None
 
 YELLOW = "#FFD93B"
 BG_DARK, BG_LIGHT = "#000000", "#F2F2F7"
@@ -359,6 +353,7 @@ def main(page: ft.Page):
         db.set_setting("app_name", name)
         app_title.value = name
         page.title = name
+        sync_quick_config()
         page.update()
         toast("Name saved")
 
@@ -372,6 +367,7 @@ def main(page: ft.Page):
         db.set_setting("currency", symbol)
         budget_amount.prefix = ft.Text(prefix())
         refresh()
+        sync_quick_config()
         toast("Currency saved")
 
     app_name_field = field(label="Name", value=page.title,
@@ -454,6 +450,7 @@ def main(page: ft.Page):
         refresh_recurring()
         load_budget()
         refresh()
+        sync_quick_config()
 
     def start_import(text):
         try:
@@ -834,6 +831,7 @@ def main(page: ft.Page):
             for r in db.list_categories()]
 
     def after_category_change():
+        sync_quick_config()
         refresh_category_controls()
         build_category_rows()
         refresh()
@@ -953,7 +951,7 @@ def main(page: ft.Page):
                                                card(label("LAUNCH"), open_add_switch,
                                                     ft.Text("Opens the new-record panel straight away, so one tap "
                                                             "on the app icon is enough to add a record.", size=12)),
-                                               card(label("QUICK ADD"), notify_switch, reply_switch, notify_note))),
+                                               card(label("QUICK ADD"), notify_switch, notify_note))),
                    tile(ft.Icons.FOLDER_OPEN, "#5AA9E6", "Export Data", open_export),
                    tile(ft.Icons.DOWNLOAD, "#4FB477", "Import Data", open_import)),
          ft.Container(height=100)],
@@ -1040,6 +1038,7 @@ def main(page: ft.Page):
     def on_lifecycle(e):  # lock again whenever the app goes to the background
         if e.state == ft.AppLifecycleState.RESUME:
             state["skip_lock"] = False
+            import_quick_records(True)
         elif e.state in (ft.AppLifecycleState.PAUSE, ft.AppLifecycleState.HIDE):
             if lock_enabled() and not state.get("skip_lock"):
                 lock()
@@ -1099,84 +1098,36 @@ def main(page: ft.Page):
                     "so use Export Data regularly. The lock keeps other people out of the app; "
                     "it does not encrypt the data file.", size=12)))
 
-    # ================= QUICK-ADD NOTIFICATION (Android only) =================
-    NOTIFY_ID = 1
-    quick = {"service": None}
-
-    def on_notification_tap(e):  # tap on the notification itself or on one of its two buttons
-        data = json.loads(e.data or "{}")
-        kind = "income" if data.get("action_id") == "income" else "expense"
-        typed = (data.get("input") or "").strip()
-        if typed:  # typed straight into the notification: save it without opening anything
-            save_quick_reply(typed, kind)
-            return
-        if lock_enabled() and lock_screen.visible:
-            state["open_after_unlock"] = kind  # opens after the PIN is entered
-        else:
-            open_entry(kind=kind)
-
-    def save_quick_reply(text, kind):
+    # ================= QUICK-ADD (Android notification + pop-up form) =================
+    def sync_quick_config():
+        """Tells the Android side whether to show the notification and what the pop-up form offers."""
         try:
-            cents, category, wallet, memo = sv.parse_quick_entry(text, db.CATEGORIES)
-        except ValueError as problem:
-            body = f"Couldn't save: {problem}"
-        else:
-            category = category or ("Other" if "Other" in db.CATEGORIES else db.CATEGORIES[0])
-            db.add_transaction(cents, kind, category, wallet or "Wallet", sv.today(), memo)
+            db.write_quick_config(db.get_setting("device_quick_notify", "0") == "1", sv.CURRENCY,
+                                  app_title.value, db.CATEGORIES)
+        except OSError:
+            pass
+
+    def import_quick_records(announce=False):
+        """Records typed into the pop-up form while the app was closed are waiting in a file."""
+        added = db.import_quick_inbox()
+        if added:
             refresh()
-            body = f"Saved {'+' if kind == 'income' else '-'}{sv.money(cents)} · {category}" + (f" · {memo}" if memo else "")
-        page.run_task(show_quick_add, body)  # also clears the "sending" spinner on the reply box
+            if announce:
+                toast(f"Added {added} record(s) from the quick-add form")
+        return added
 
-    def reply_mode():
-        return db.get_setting("device_quick_reply", "0") == "1"
-
-    def quick_action(action_id, title):
-        if reply_mode():  # type the record into the notification itself; the app does not open
-            return NotificationAction(action_id, title, cancel_notification=False, shows_user_interface=False,
-                                      inputs=[NotificationActionInput(label="e.g. 12.50 food lunch")])
-        return NotificationAction(action_id, title, cancel_notification=False)
-
-    async def show_quick_add(body="Tap to add a record"):
-        service = quick["service"]
-        if not service or not await service.request_permissions():
-            return False
-        await service.show_notification(
-            notification_id=NOTIFY_ID, title="WhereMyMoney", body=body,
-            actions=[quick_action("expense", "Add expense"), quick_action("income", "Add income")],
-            channel_id="quick_add", channel_name="Quick add",
-            channel_description="Keeps a shortcut for adding records in your notification bar",
-            importance="low", play_sound=False, enable_vibration=False, silent=True, only_alert_once=True,
-            ongoing=True, auto_cancel=False)
-        return True
-
-    async def on_notify_switch(e):
-        if e.control.value:
-            ok = await show_quick_add()
-            if not ok:
-                e.control.value = False
-                toast("Couldn't show it. Check that notifications are allowed for this app.")
-            db.set_setting("device_quick_notify", "1" if ok else "0")
-        else:
-            db.set_setting("device_quick_notify", "0")
-            if quick["service"]:
-                await quick["service"].cancel(NOTIFY_ID)
+    def on_notify_switch(e):
+        db.set_setting("device_quick_notify", "1" if e.control.value else "0")
+        sync_quick_config()
         page.update()
 
     notify_switch = ft.Switch(label="Notification shortcut", value=db.get_setting("device_quick_notify", "0") == "1",
                               disabled=page.platform != ft.PagePlatform.ANDROID, on_change=on_notify_switch)
-    async def on_reply_switch(e):
-        db.set_setting("device_quick_reply", "1" if e.control.value else "0")
-        if quick["service"] and db.get_setting("device_quick_notify", "0") == "1":
-            await show_quick_add()  # swap the buttons right away
-        page.update()
-
-    reply_switch = ft.Switch(label="Type records into the notification", value=reply_mode(),
-                             disabled=page.platform != ft.PagePlatform.ANDROID, on_change=on_reply_switch)
-    notify_note = ft.Text("Keeps a quiet notification in your notification bar with Add expense and Add income "
-                          "buttons (Android only). On newer Android versions you can swipe it away; it comes "
-                          "back the next time you open the app. With 'Type records into the notification', the two buttons "
-                          "open a typing box instead of the app: type for example '12.50 food lunch' (amount, then "
-                          "an optional category, bank or wallet, and a memo).", size=12)
+    notify_note = ft.Text(
+        "Android only. Keeps a quiet notification with Expense, Income and Open app buttons. Expense and Income "
+        "open a small form over whatever app you are using (category, account and memo included) without opening "
+        "WhereMyMoney. The new records show up here the next time you open the app. It needs the Android patch "
+        "step when building (see README).", size=12)
 
     # ================= SUB-PAGES + NAVIGATION =================
     body = ft.Container(expand=True, padding=16)
@@ -1309,6 +1260,8 @@ def main(page: ft.Page):
     page.add(main_area, lock_screen)
     page.on_app_lifecycle_state_change = on_lifecycle
     refresh_recurring()
+    sync_quick_config()
+    import_quick_records()
     show_tab(0)
     draw_dots()
     if lock_enabled():
@@ -1316,10 +1269,7 @@ def main(page: ft.Page):
         state["open_after_unlock"] = "expense" if open_add_switch.value else None
     elif open_add_switch.value:
         open_entry()
-    if FletAndroidNotifications and page.platform == ft.PagePlatform.ANDROID:  # last, so a replayed tap finds the UI
-        quick["service"] = FletAndroidNotifications(on_notification_tap=on_notification_tap)
-        if db.get_setting("device_quick_notify", "0") == "1":
-            page.run_task(show_quick_add)
+
 
 
 ft.run(main)

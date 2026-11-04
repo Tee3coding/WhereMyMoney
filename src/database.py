@@ -1,5 +1,6 @@
 """Database layer: everything that touches SQLite lives here."""
 import calendar
+import json
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -424,3 +425,57 @@ def import_data(data: dict) -> None:
                              [(c["name"].strip(), c["icon"], c["color"], i) for i, c in enumerate(data["categories"])])
         _ensure_used_categories(conn)
         _sync_categories(conn)
+
+
+# ---------- quick-add: files shared with the Android notification and pop-up form ----------
+def storage_folder() -> str:
+    return os.path.dirname(_db_path())
+
+
+def write_quick_config(enabled: bool, currency: str, app_name: str, categories) -> None:
+    """The Android side reads this to know what to show (it never opens the database itself)."""
+    path = os.path.join(storage_folder(), "quick_config.json")
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump({"enabled": bool(enabled), "currency": currency, "app": app_name,
+                   "categories": list(categories), "wallets": list(WALLETS)}, f, ensure_ascii=False)
+    os.replace(path + ".tmp", path)  # replaced in one step, so the Android side never reads half a file
+
+
+def import_quick_inbox() -> int:
+    """Adds the records typed into the Android pop-up form while the app was closed. Returns how many."""
+    inbox = os.path.join(storage_folder(), "quick_inbox.jsonl")
+    work = inbox + ".work"
+    try:
+        if os.path.exists(inbox):
+            if os.path.exists(work):  # left over from an interrupted import: keep both
+                with open(work, "a", encoding="utf-8") as out, open(inbox, encoding="utf-8") as src:
+                    out.write(src.read())
+                os.remove(inbox)
+            else:
+                os.replace(inbox, work)  # new records can keep arriving in a fresh file
+        if not os.path.exists(work):
+            return 0
+        with open(work, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return 0
+    added = 0
+    fallback = "Other" if "Other" in CATEGORIES else CATEGORIES[0]
+    with _db() as conn:
+        for line in lines:
+            try:
+                row = json.loads(line)
+                sv.parse_date(row["date"])
+                cents, kind = row["amount_cents"], row["type"]
+                if not (_money_ok(cents) and kind in ("income", "expense")):
+                    continue
+                category = row.get("category") if row.get("category") in CATEGORIES else fallback
+                wallet = row.get("wallet") if row.get("wallet") in WALLETS else "Wallet"
+                conn.execute(
+                    "INSERT INTO transactions (amount_cents, type, category, wallet, date, note) VALUES (?, ?, ?, ?, ?, ?)",
+                    (cents, kind, category, wallet, row["date"], str(row.get("note", ""))))
+                added += 1
+            except (ValueError, KeyError, TypeError):
+                continue  # skip a damaged line, keep the rest
+    os.remove(work)
+    return added
