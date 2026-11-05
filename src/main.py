@@ -1,4 +1,5 @@
 """WhereMyMoney: the Flet user interface. Run with: flet run src/main.py"""
+import asyncio
 import calendar
 import math
 import re
@@ -946,17 +947,22 @@ def main(page: ft.Page):
                 lock_msg.value = f"Too many tries. Wait {30 * (fails // 5)} seconds."
         draw_dots()
 
+    bio_button = ft.TextButton("Use fingerprint", icon=ft.Icons.FINGERPRINT, visible=False,
+                               on_click=lambda e: ask_fingerprint())
+
     lock_screen = ft.SafeArea(
         ft.Container(
             ft.Column([
                 ft.Icon(ft.Icons.LOCK, size=44, color=YELLOW), ft.Text("Enter your PIN", size=20), lock_dots, lock_msg,
                 ft.Column([ft.Row([lock_key(k) for k in row], alignment=ft.MainAxisAlignment.CENTER, spacing=18)
                            for row in (["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["", "0", "⌫"])], spacing=14),
+                bio_button,
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER, spacing=16),
             alignment=ft.Alignment.CENTER, expand=True),
         expand=True, visible=False)
 
     def lock():
+        was_locked = lock_screen.visible
         lock_state["pin"] = ""
         lock_msg.value = ""
         draw_dots()
@@ -966,7 +972,32 @@ def main(page: ft.Page):
         lock_screen.visible = True
         page.bottom_appbar.visible = False
         page.floating_action_button.visible = False
+        bio_button.visible = fingerprint_enabled()
         page.update()
+        if fingerprint_enabled() and not was_locked:  # already locked: don't stack up a second prompt
+            ask_fingerprint()
+
+    def fingerprint_enabled():
+        return (page.platform == ft.PagePlatform.ANDROID and lock_enabled()
+                and db.get_setting("lock_bio", "0") == "1" and db.biometric_available())
+
+    def ask_fingerprint():
+        """Android shows its fingerprint prompt; a success comes back as a signed file that we poll for."""
+        token = db.request_biometric()
+        state["bio_token"] = token
+        if token:
+            page.run_task(wait_fingerprint, token)
+
+    async def wait_fingerprint(token):
+        while lock_screen.visible and state.get("bio_token") == token:
+            await asyncio.sleep(0.4)
+            if db.biometric_succeeded(token):
+                state["bio_token"] = ""
+                # The system prompt can send late "app paused" events right after it closes; don't re-lock on those.
+                state["bio_grace"] = time.time() + 3
+                db.set_setting("lock_fails", "0")
+                unlock()
+                return
 
     def unlock():
         lock_screen.visible = False
@@ -983,7 +1014,7 @@ def main(page: ft.Page):
             state["skip_lock"] = False
             import_quick_records(True)
         elif e.state in (ft.AppLifecycleState.PAUSE, ft.AppLifecycleState.HIDE):
-            if lock_enabled() and not state.get("skip_lock"):
+            if lock_enabled() and not state.get("skip_lock") and time.time() > state.get("bio_grace", 0):
                 lock()
 
     def pin_field(text):
@@ -1010,6 +1041,8 @@ def main(page: ft.Page):
             else:
                 db.set_setting("lock", "" if mode == "disable" else sv.hash_pin(new.value))
                 db.set_setting("lock_fails", "0")
+                if mode == "disable":
+                    db.set_setting("lock_bio", "0")
                 page.pop_dialog()
                 sync_lock_controls()
                 toast("App lock turned off" if mode == "disable" else "PIN saved")
@@ -1027,15 +1060,30 @@ def main(page: ft.Page):
     change_pin_btn = ft.FilledTonalButton("Change PIN", icon=ft.Icons.EDIT, visible=lock_enabled(),
                                           on_click=lambda e: pin_dialog("change"))
 
+    def on_bio_switch(e):
+        db.set_setting("lock_bio", "1" if e.control.value else "0")
+        toast("Fingerprint unlock on" if e.control.value else "Fingerprint unlock off")
+
+    bio_switch = ft.Switch(label="Unlock with fingerprint", value=False, on_change=on_bio_switch)
+    bio_note = ft.Text(size=12)
+
     def sync_lock_controls():
         lock_switch.value = lock_enabled()
         change_pin_btn.visible = lock_enabled()
+        on_android = page.platform == ft.PagePlatform.ANDROID
+        can_bio = on_android and db.biometric_available()
+        bio_switch.visible = bio_note.visible = lock_enabled()
+        bio_switch.value = can_bio and db.get_setting("lock_bio", "0") == "1"
+        bio_switch.disabled = not can_bio
+        bio_note.value = ("The PIN keypad stays available as a backup." if can_bio else
+                          "Not available: it needs Android 9 or newer, a fingerprint set up in your phone's "
+                          "settings, and the installed app (not the computer version).")
         page.update()
 
     def open_lock_page():
         sync_lock_controls()
         open_subpage("App Lock", card(
-            label("APP LOCK"), lock_switch, change_pin_btn,
+            label("APP LOCK"), lock_switch, change_pin_btn, bio_switch, bio_note,
             ft.Text("The app asks for your 4-digit PIN when you open it and each time you come back to it. "
                     "If you forget the PIN, the only way in is to clear the app's data, which erases your records, "
                     "so use Export Data regularly. The lock keeps other people out of the app; "

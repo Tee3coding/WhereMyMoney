@@ -16,6 +16,7 @@ PACKAGE_DIR = pathlib.Path("java") / "com" / "wheremymoney" / "quickadd"
 PERMISSIONS = [
     "android.permission.POST_NOTIFICATIONS",
     "android.permission.RECEIVE_BOOT_COMPLETED",
+    "android.permission.USE_BIOMETRIC",  # fingerprint unlock for the app lock
 ]
 COMPONENTS = """
         <activity
@@ -65,18 +66,19 @@ def patch_manifest():
     if not path.exists():
         fail(f"{path} not found")
     text = path.read_text(encoding="utf-8")
-    if "QuickAddActivity" in text:
-        print("  manifest already patched")
-        return
-    missing = [p for p in PERMISSIONS if p not in text]
+    missing = [p for p in PERMISSIONS if p not in text]  # checked every run, so new permissions get added too
     if missing:
         lines = "".join(f'    <uses-permission android:name="{p}" />\n' for p in missing)
         text, count = re.subn(r"(<application\b)", lambda m: lines + "    " + m.group(1), text, count=1)
         if not count:
             fail("no <application> tag found in AndroidManifest.xml")
-    if "</application>" not in text:
-        fail("no </application> tag found in AndroidManifest.xml")
-    text = text.replace("</application>", COMPONENTS + "    </application>", 1)
+    if "QuickAddActivity" not in text:
+        if "</application>" not in text:
+            fail("no </application> tag found in AndroidManifest.xml")
+        text = text.replace("</application>", COMPONENTS + "    </application>", 1)
+    elif not missing:
+        print("  manifest already patched")
+        return
     path.write_text(text, encoding="utf-8")
     print("  manifest patched")
 

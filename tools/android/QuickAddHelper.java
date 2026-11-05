@@ -174,6 +174,7 @@ public final class QuickAddHelper {
     /** Called by MainActivity when the app comes to the front: re-post, then watch for the switch in Settings. */
     public static void onResume(final Activity activity) {
         stop();
+        BiometricHelper.onResume(activity);
         sync(activity, true);
         poller = new Runnable() {
             @Override
@@ -187,6 +188,7 @@ public final class QuickAddHelper {
 
     public static void onPause() {
         stop();
+        BiometricHelper.onPause();
     }
 
     private static void stop() {

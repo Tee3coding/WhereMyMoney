@@ -2,6 +2,7 @@
 import calendar
 import json
 import os
+import secrets
 import sqlite3
 from contextlib import contextmanager
 
@@ -480,3 +481,42 @@ def import_quick_inbox() -> int:
                 continue  # skip a damaged line, keep the rest
     os.remove(work)
     return added
+
+# ---------- fingerprint unlock: files shared with the Android side (see tools/android/BiometricHelper.java) ----------
+def _bio_path(name: str) -> str:
+    return os.path.join(storage_folder(), name)
+
+
+def biometric_available() -> bool:
+    """The Android side writes 'yes' when this phone has an enrolled fingerprint (always False elsewhere)."""
+    try:
+        with open(_bio_path("biometric_status.txt"), encoding="utf-8") as f:
+            return f.read().strip() == "yes"
+    except OSError:
+        return False
+
+
+def request_biometric() -> str:
+    """Asks the Android side to show the fingerprint prompt. Returns the token a success will be signed with."""
+    token = secrets.token_hex(8)
+    try:
+        if os.path.exists(_bio_path("biometric_result.txt")):
+            os.remove(_bio_path("biometric_result.txt"))  # never trust a result from an earlier request
+        with open(_bio_path("biometric_request.txt"), "w", encoding="utf-8") as f:
+            f.write(token)
+    except OSError:
+        return ""
+    return token
+
+
+def biometric_succeeded(token: str) -> bool:
+    """True once the fingerprint prompt reported success for exactly this request."""
+    path = _bio_path("biometric_result.txt")
+    try:
+        with open(path, encoding="utf-8") as f:
+            ok = bool(token) and f.read().strip() == token
+        if ok:
+            os.remove(path)
+        return ok
+    except OSError:
+        return False
