@@ -1,85 +1,52 @@
 # WhereMyMoney
 
-Personal income and expense tracker (Python + Flet, Android).
+Personal income and expense tracker for Android, written in Python with [Flet](https://flet.dev).
+Records, budgets, reports, calendar, search, PIN lock, and a quick-add notification. All data stays on your phone.
 
-## Run
+## Run on your computer
 ```
 python -m venv .venv
 .venv\Scripts\activate        # Mac/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 flet run src/main.py
 ```
-Phone testing: install the Flet app, same Wi-Fi, then `flet run --android src/main.py`.
-
-## Choosing the name and icon shown on your phone
-These are fixed when the APK is built:
-- **Name:** change `product` under `[tool.flet]` in `pyproject.toml`.
-- **Icon:** put a square PNG (1024x1024 recommended) at `src/assets/icon.png`.
-Then run `flet build apk` (check flet.dev/docs for current build steps).
-
-The in-app name (top bar) can be changed any time in Settings.
-
-## Moving to a new phone
-Settings > Data > **Export data** (save the file or copy the text), send it to the new phone, then
-Settings > Data > **Import data** there. Importing replaces everything in the app with the backup.
 
 ## Build the Android APK
-Needs Python 3.10 or newer, Android Studio (for the Android SDK) and JDK 17.
-Use a **fresh virtual environment**, then `pip install -r requirements.txt`.
+Needs Python 3.11+, Android Studio (for the Android SDK) and JDK 17. Use a fresh virtual environment.
 
-1. **Export your data first** (Mine > Export Data) if the app is already installed, and keep a copy of your
-   current working APK in case you want to go back.
-2. If you built before, delete the old `build` folder (it can hold outdated packages).
-3. From the project folder: `python tools/build_apk.py`
-4. Install the APK it prints at the end (keeps your data): `adb install -r "<path it shows>"`
+1. Export your data first if the app is already installed (Mine > Export Data).
+2. `python tools/build_apk.py` (add `--skip-flet` to reuse the last generated project, `--dry-run` to only print the steps).
+3. Install the APK it prints at the end. `-r` keeps your data:
+   ```
+   adb install -r "build/flutter/build/app/outputs/flutter-apk/app-release.apk"
+   ```
+   If `adb` is not found, it is in `%LOCALAPPDATA%\Android\Sdk\platform-tools`. Or copy the APK to your phone and open it.
 
-`tools/build_apk.py` does three things in order: `flet build apk`, `tools/patch_android.py` (adds the native
-quick-add code to the generated Android project), and `flutter build apk` with the settings Flet normally passes
-(`SERIOUS_PYTHON_VERSION`, `SERIOUS_PYTHON_SITE_PACKAGES`, `SERIOUS_PYTHON_APP`). Running Flutter by hand without
-those fails with "SERIOUS_PYTHON_SITE_PACKAGES environment variable is not set".
+If the build misbehaves, delete the `build` folder and run it again.
 
-- It uses the Flutter that Flet downloads (`~/flutter/3.44.8`). A different Flutter on your PATH is not used.
-- `--skip-flet` reuses the project from the last run (after the first run).
-- `--dry-run` only prints the commands.
-- Icon: `src/assets/icon.png`. Home screen name: `product` in `pyproject.toml`.
+The script runs `flet build apk`, then `tools/patch_android.py` (adds the native quick-add code), then `flutter build apk`.
+It uses the Flutter that Flet downloads to `~/flutter/<version>`.
 
-## How the quick-add notification works
-- Turn it on in Mine > Preferences > Quick add. The app writes `quick_config.json` (categories, currency, on/off).
-- The Android side (`tools/android/*.java`, added by `patch_android.py`) shows a quiet notification with
-  Expense, Income and Open app buttons. Expense and Income open a small form over whatever app is open.
-- The form appends the record to `quick_inbox.jsonl`; the app imports it when it is opened or comes back to the front.
-- The form never opens the database itself, so it cannot damage your data.
+## Name and icon
+- Home screen name: `product` under `[tool.flet]` in `pyproject.toml`.
+- Icon: `src/assets/icon.png` (square PNG, 1024x1024 recommended).
 
-## Moving to a new phone
-Settings > Data > **Export data** (save the file or copy the text), send it to the new phone, then
-Settings > Data > **Import data** there. Importing replaces everything in the app with the backup.
+The name shown inside the app can be changed any time in Mine.
 
-## Build the Android APK (3 extra steps because of the notification package)
-Needs Python 3.11 or newer (3.12 or 3.13 recommended), Android Studio (for the Android SDK) and JDK 17.
-Use a **fresh virtual environment**, then `pip install -r requirements.txt`.
+## Quick-add notification
+Turn it on in Mine > Preferences > Quick add. It shows a notification with Expense, Income and Open app buttons;
+Expense and Income open a small form over whatever app you are using. Records typed there are saved to a file and
+imported the next time you open WhereMyMoney. The form never touches the database. Android only, and it needs the
+patch step in the build above.
 
-1. **Export your data first** (Mine > Export Data) if the app is already installed.
-2. In the project folder (environment active; on Windows run `set PYTHONIOENCODING=utf-8` first):
-   `flet build apk -v --bundle-id com.wheremymoney`
-   This is expected to **fail with a "desugaring" error**. Only that failure is OK. Any other error must be fixed first.
-3. Patch the generated Android project: `flet-android-notifications-patch --project-root build/flutter`
-4. Rebuild it with Flutter: `cd build/flutter`, then `flutter build apk --release`.
-   Flutter was downloaded by Flet (look in `C:\Users\<you>\flutter\<version>\bin`); add that folder to `PATH` if `flutter` is not found.
-5. Install over the old app: `adb install -r build\app\outputs\flutter-apk\app-release.apk`
-   (`-r` keeps your data). Or copy the APK to your phone and open it.
+## Move to a new phone
+Mine > Export Data, send the file to the new phone, then Mine > Import Data. Importing replaces everything in the app.
 
-Repeat steps 2 to 5 every time you build (the patch is lost when the project is regenerated).
-Icon: `src/assets/icon.png`. Home screen name: `product` in `pyproject.toml`.
-
-## Moving to a new phone
-Settings > Data > **Export data** (save the file or copy the text), send it to the new phone, then
-Settings > Data > **Import data** there. Importing replaces everything in the app with the backup.
-
-## Build the Android APK
-1. Install Android Studio (gives you the Android SDK) and a JDK 17.
-2. In the project folder (virtual environment active): `flet build apk --bundle-id com.wheremymoney`
-   (the app ID is also set in `pyproject.toml`; the flag makes sure it is exactly `com.wheremymoney`)
-3. The APK appears in `build/apk/`. Copy it to your phone and open it
-   (allow "install unknown apps" for your file manager or browser when asked).
-4. Your icon is `src/assets/icon.png` (replace with your own square PNG, 1024x1024).
-   Your home screen name is `product` in `pyproject.toml`.
+## Project layout
+```
+src/main.py        UI (Flet)
+src/database.py    SQLite storage
+src/services.py    Parsing, formatting, PIN hashing, backup JSON
+src/assets/        App icon
+tools/             APK build script, Android patch and native quick-add Java code
+```
