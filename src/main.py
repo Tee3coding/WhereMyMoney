@@ -175,10 +175,10 @@ def main(page: ft.Page):
     # ================= ENTRY SHEET (add + edit, category grid + keypad) =================
     KEYS = [["7", "8", "9", "date"], ["4", "5", "6", "+"], ["1", "2", "3", "-"], [".", "0", "⌫", "="]]
 
-    def open_entry(t=None, kind="expense"):
+    def open_entry(t=None, kind="expense", date=None):
         form = {
             "kind": t["type"] if t else kind, "category": t["category"] if t else db.CATEGORIES[0],
-            "wallet": t["wallet"] if t else "Wallet", "date": t["date"] if t else sv.today(),
+            "wallet": t["wallet"] if t else "Wallet", "date": t["date"] if t else (date or sv.today()),
             "text": f"{t['amount_cents'] / 100:.2f}".rstrip("0").rstrip(".") if t else "",
         }
         display = field(  # type here with the phone keyboard, or use the keypad below (both stay in sync)
@@ -281,60 +281,14 @@ def main(page: ft.Page):
                     grid,
                     ft.Row([segmented("wallet", [(w, w, WALLET_ICONS[w]) for w in db.WALLETS])],
                            alignment=ft.MainAxisAlignment.CENTER),
-                    ft.Container(display, alignment=ft.Alignment.CENTER_RIGHT, padding=ft.Padding.only(right=8)),
-                    memo, error,
+                    display, memo, error,
                     ft.Column([ft.Row([key_button(k) for k in row], spacing=6) for row in KEYS], spacing=6),
                     ft.Row(buttons, spacing=8),
-                ], scroll=ft.ScrollMode.AUTO, spacing=10),
+                ], scroll=ft.ScrollMode.AUTO, spacing=10, horizontal_alignment=ft.CrossAxisAlignment.STRETCH),
                 padding=16, height=(page.height or 800) * 0.92),
             scrollable=True, show_drag_handle=True, use_safe_area=True)
         show()
         page.show_dialog(sheet)
-
-    # ================= BUDGETS (dropdown) =================
-    budget_cat = dropdown("Category", db.CATEGORIES[0], icon_options(db.CATEGORIES, CATEGORY_ICONS))
-    budget_amount = field(label="Monthly limit", prefix_text=prefix(), text_size=24,
-                          keyboard_type=ft.KeyboardType.NUMBER)
-    budget_info = ft.Text()
-    budget_error = ft.Text(color=ft.Colors.RED)
-
-    def load_budget(e=None):
-        limit = db.get_budgets().get(budget_cat.value)
-        budget_amount.value = f"{limit / 100:.2f}" if limit else ""
-        budget_info.value = f"Current budget: {sv.money(limit)}" if limit else "No budget set for this category."
-        budget_error.value = ""
-        page.update()
-
-    def save_budget(e):
-        try:
-            cents = sv.parse_amount(budget_amount.value)
-        except ValueError as problem:
-            budget_error.value = str(problem)
-            page.update()
-            return
-        db.set_budget(budget_cat.value, cents)
-        load_budget()
-        refresh()
-        toast("Budget saved")
-
-    def remove_budget(e):
-        db.set_budget(budget_cat.value, 0)
-        load_budget()
-        refresh()
-        toast("Budget removed")
-
-    budget_cat.on_select = load_budget
-    budgets_view = ft.Column(
-        [
-            card(budget_cat, budget_info, budget_amount, budget_error),
-            ft.Row([
-                ft.FilledButton("Save", icon=ft.Icons.CHECK, height=50, expand=True, on_click=save_budget),
-                ft.OutlinedButton("Remove", icon=ft.Icons.DELETE_OUTLINE, height=50, expand=True,
-                                  on_click=remove_budget),
-            ]),
-        ],
-        scroll=ft.ScrollMode.AUTO, spacing=16,
-    )
 
     # ================= SETTINGS (text boxes save by themselves) =================
     def set_theme(e):
@@ -365,7 +319,6 @@ def main(page: ft.Page):
             return
         sv.CURRENCY = symbol
         db.set_setting("currency", symbol)
-        budget_amount.prefix = ft.Text(prefix())
         refresh()
         sync_quick_config()
         toast("Currency saved")
@@ -445,10 +398,8 @@ def main(page: ft.Page):
         name = db.get_setting("app_name", "WhereMyMoney")
         page.title = app_title.value = app_name_field.value = name
         currency_field.value = sv.CURRENCY
-        budget_amount.prefix = ft.Text(prefix())
         refresh_category_controls()
         refresh_recurring()
-        load_budget()
         refresh()
         sync_quick_config()
 
@@ -623,9 +574,6 @@ def main(page: ft.Page):
 
     # ---- filters: tap to filter, tap again to clear ----
     fl = {"wallet": "", "kind": "", "category": "", "period": "month"}
-    search_box = field(label="Search notes or categories", prefix_icon=ft.Icons.SEARCH, on_change=lambda e: refresh())
-    f_all_months = ft.Switch(label="Search all months", value=False, on_change=lambda e: refresh())
-    search_panel = ft.Column([search_box, f_all_months], visible=False, spacing=4)
     GROUPS = {
         "wallet": [("Bank", I.ACCOUNT_BALANCE, "Bank", None), ("Wallet", I.ACCOUNT_BALANCE_WALLET, "Wallet", None)],
         "period": [("month", I.CALENDAR_VIEW_MONTH, "Month", None), ("year", I.CALENDAR_MONTH, "Year", None)],
@@ -673,13 +621,6 @@ def main(page: ft.Page):
                 on_click=lambda e, v=value: toggle_filter("category", v))
         chip_row.controls = [chip(n) for n in [ALL] + db.CATEGORIES]
 
-    def toggle_search(e):
-        search_panel.visible = not search_panel.visible
-        if not search_panel.visible:
-            search_box.value = ""
-            f_all_months.value = False
-        refresh()
-
     def wallet_filter():
         return fl["wallet"]
 
@@ -704,9 +645,10 @@ def main(page: ft.Page):
     budget_hint = ft.Text(size=15, expand=True)
     home_list = ft.Column(spacing=10)
     home_header = ft.Row(
-        [ft.Container(width=48), month_button(home_month),
-         ft.Row([ft.IconButton(ft.Icons.SEARCH, on_click=toggle_search),
-                 ft.IconButton(ft.Icons.CALENDAR_MONTH, on_click=pick_month)], spacing=0)],
+        [month_button(home_month),
+         ft.Row([ft.IconButton(ft.Icons.SEARCH, tooltip="Search", on_click=lambda e: open_search_page()),
+                 ft.IconButton(ft.Icons.CALENDAR_MONTH, tooltip="Calendar",
+                               on_click=lambda e: open_calendar_page())], spacing=0)],
         alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
     home_filters = ft.Column([ft.Row([make_group("wallet"), make_group("kind")], spacing=12), chip_row], spacing=10)
     summary_card = card(
@@ -716,7 +658,7 @@ def main(page: ft.Page):
         ft.Divider(height=1),
         ft.Container(ft.Row([budget_hint, ft.Icon(ft.Icons.CHEVRON_RIGHT)]), padding=ft.Padding.symmetric(vertical=6),
                      on_click=lambda e: open_budget_page()))
-    home_view = ft.Column([home_header, home_filters, search_panel, summary_card, home_list, ft.Container(height=100)],
+    home_view = ft.Column([home_header, home_filters, summary_card, home_list, ft.Container(height=100)],
                           scroll=ft.ScrollMode.AUTO, spacing=12, expand=True)
 
     def record_tile(t):
@@ -737,11 +679,9 @@ def main(page: ft.Page):
 
     def home_rows():
         month, today = state["month"], sv.today()
-        rows = db.list_transactions(
-            None if f_all_months.value else month, (search_box.value or "").strip(),
-            fl["category"], fl["kind"], fl["wallet"])
+        rows = db.list_transactions(month, "", fl["category"], fl["kind"], fl["wallet"])
         out = []
-        if month == today[:7] and not f_all_months.value and not any(t["date"] == today for t in rows):
+        if month == today[:7] and not any(t["date"] == today for t in rows):
             out += [ft.Text(f"Today {day_label(today)}", size=18, weight=ft.FontWeight.BOLD),
                     card(ft.Row([ft.Icon(ft.Icons.EDIT_NOTE, size=44), ft.Text("No record for today", size=17, expand=True),
                                  yellow_plus(lambda e: open_entry())], vertical_alignment=ft.CrossAxisAlignment.CENTER))]
@@ -785,8 +725,8 @@ def main(page: ft.Page):
     pie = fch.PieChart(sections=[], sections_space=1, center_space_radius=0)
     pie_legend, top_list = ft.Column(spacing=8), ft.Column(spacing=10)
     reports_view = ft.Column(
-        [ft.Row([month_button(rep_month)], alignment=ft.MainAxisAlignment.CENTER),
-         ft.Row([make_group("wallet"), make_group("period")], alignment=ft.MainAxisAlignment.CENTER, spacing=12),
+        [ft.Row([month_button(rep_month)], alignment=ft.MainAxisAlignment.START),
+         ft.Row([make_group("wallet"), make_group("period")], alignment=ft.MainAxisAlignment.START, spacing=12),
          card(ft.Row([ft.Column([line_total, line_avg], spacing=2, expand=True), make_pill("line")],
                      vertical_alignment=ft.CrossAxisAlignment.START), line_chart),
          card(ft.Row([ft.Text("Category Ranking", size=18, expand=True), make_pill("pie")]),
@@ -799,7 +739,7 @@ def main(page: ft.Page):
     net_text, assets_text, debts_text = ft.Text(size=40, weight=ft.FontWeight.BOLD), amount_text(26), amount_text(26)
     account_rows = ft.Column(spacing=14)
     accounts_view = ft.Column(
-        [ft.Text("Accounts", size=24, weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
+        [ft.Text("Accounts", size=24, weight=ft.FontWeight.W_500),
          ft.Container(ft.Column([
              ft.Text("Net Assets", size=18), net_text, ft.Container(height=10),
              ft.Row([ft.Column([ft.Text("Assets", size=17), assets_text], expand=True, spacing=2),
@@ -816,9 +756,6 @@ def main(page: ft.Page):
         load_categories()
         if fl["category"] not in db.CATEGORIES:
             fl["category"] = ""
-        budget_cat.options = icon_options(db.CATEGORIES, CATEGORY_ICONS)
-        if budget_cat.value not in db.CATEGORIES:
-            budget_cat.value = db.CATEGORIES[0]
 
     def build_category_rows():
         category_rows.controls = [
@@ -929,8 +866,7 @@ def main(page: ft.Page):
                             bgcolor=ft.Colors.SURFACE, border_radius=20, padding=12)
 
     mine_view = ft.Column(
-        [ft.Text("Mine", size=24, weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER),
-         card(ft.Row([ft.CircleAvatar(content=ft.Icon(ft.Icons.PERSON, size=34), radius=32,
+        [card(ft.Row([ft.CircleAvatar(content=ft.Icon(ft.Icons.PERSON, size=34), radius=32,
                                       bgcolor=ft.Colors.PRIMARY_CONTAINER),
                       app_title, ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=edit_name)],
                      vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=14)),
@@ -939,7 +875,6 @@ def main(page: ft.Page):
                       stat_cell("Records", m_count)])),
          ft.Text("Commonly Used", size=18),
          tile_grid(tile(ft.Icons.BAR_CHART, "#F5A623", "Budget", lambda e: open_budget_page()),
-                   tile(ft.Icons.EVENT_REPEAT, "#4A90E2", "Recurring Transactions", lambda e: open_recurring_page()),
                    tile(ft.Icons.GRID_VIEW, "#E8704A", "Category", lambda e: open_category_page())),
          ft.Text("Settings", size=18),
          tile_grid(tile(ft.Icons.LOCK, "#7E57C2", "App Lock", lambda e: open_lock_page()),
@@ -955,7 +890,7 @@ def main(page: ft.Page):
                    tile(ft.Icons.FOLDER_OPEN, "#5AA9E6", "Export Data", open_export),
                    tile(ft.Icons.DOWNLOAD, "#4FB477", "Import Data", open_import)),
          ft.Container(height=100)],
-        scroll=ft.ScrollMode.AUTO, spacing=12, expand=True)
+        scroll=ft.ScrollMode.AUTO, spacing=12, expand=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
 
     # ================= APP LOCK (optional 4-digit PIN) =================
     lock_state = {"pin": ""}
@@ -1134,23 +1069,312 @@ def main(page: ft.Page):
     swipe = lambda view: ft.GestureDetector(content=view, on_horizontal_drag_end=on_swipe, expand=True)
     tabs = [swipe(home_view), swipe(reports_view), accounts_view, mine_view]
 
-    def open_subpage(title, *controls):
+    def open_subpage(title, *controls, back=None):
+        """title is text, or a control (the Search page puts its search box there). back = page to return to."""
+        state["redraw"] = None
+        head = title if isinstance(title, ft.Control) else ft.Text(title, size=20, weight=ft.FontWeight.W_500)
         body.content = ft.Column(
-            [ft.Row([ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: show_tab(state["tab"])),
-                     ft.Text(title, size=20, weight=ft.FontWeight.W_500)]), *controls],
+            [ft.Row([ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: back() if back else show_tab(state["tab"])),
+                     head],
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER), *controls],
             scroll=ft.ScrollMode.AUTO, spacing=12, expand=True)
         state["sub"] = True
         build_nav()
         page.update()
 
+    def edit_budget(category, on_done=None):
+        """Set, change or remove the monthly limit of one category (on_done runs after saving/removing)."""
+        budgets = db.get_budgets()
+        cat = ft.Row([badge(category, 40), ft.Text(category, size=18)], spacing=12)
+        amount = field(label="Monthly limit", prefix_text=prefix(), text_size=24, autofocus=True,
+                       keyboard_type=ft.KeyboardType.NUMBER,
+                       value=f"{budgets[category] / 100:.2f}" if category in budgets else "")
+        error = ft.Text(color=ft.Colors.RED)
+
+        def save(e):
+            try:
+                cents = sv.parse_amount(amount.value)
+            except ValueError as problem:
+                error.value = str(problem)
+                page.update()
+                return
+            db.set_budget(category, cents)
+            page.pop_dialog()
+            refresh()
+            toast("Budget saved")
+            if on_done:
+                on_done()
+
+        def remove(e):
+            db.set_budget(category, 0)
+            page.pop_dialog()
+            refresh()
+            toast("Budget removed")
+            if on_done:
+                on_done()
+
+        actions = [ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
+                   ft.FilledButton("Save", on_click=save)]
+        if category in budgets:
+            actions.insert(1, ft.TextButton("Remove", on_click=remove))
+        page.show_dialog(ft.AlertDialog(title=ft.Text("Monthly budget"),
+                                        content=ft.Column([cat, amount, error], tight=True, width=320),
+                                        actions=actions))
+
+    def open_category_budget_page():
+        """Pick which category to budget: a grid of all categories (the ones with a budget have a yellow ring)."""
+        budgets = db.get_budgets()
+        items = [ft.Container(
+            ft.Column([badge(c, 64, c in budgets),
+                       ft.Text(c, size=11, text_align=ft.TextAlign.CENTER, max_lines=2)],
+                      horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4),
+            width=78, on_click=lambda e, c=c: edit_budget(c, on_done=open_budget_page)) for c in db.CATEGORIES]
+        open_subpage("Category Budget", ft.Row(items, wrap=True, spacing=0, run_spacing=16,
+                                               alignment=ft.MainAxisAlignment.CENTER),
+                     ft.Container(height=60), back=open_budget_page)
+
     def open_budget_page():
-        load_budget()
-        open_subpage("Budget", *budgets_view.controls)
+        track = ft.Colors.with_opacity(0.12, ft.Colors.ON_SURFACE)
+        month_text = ft.Text(size=22, weight=ft.FontWeight.W_500)
+        ring = ft.ProgressRing(value=1, width=112, height=112, stroke_width=16, color=YELLOW, bgcolor=track)
+        ring_text = ft.Text(size=22, weight=ft.FontWeight.W_500)
+        total_t, left_t, avg_t = (ft.Text(size=17) for _ in range(3))
+        rows = ft.Column(spacing=16)
+        rows_card = ft.Container(rows, bgcolor=ft.Colors.SURFACE, border_radius=20, padding=16)
+
+        def stat(name, value):
+            return ft.Row([ft.Text(name, size=15, color=ft.Colors.OUTLINE, expand=True), value])
+
+        def draw():
+            month, today = state["month"], sv.today()
+            month_text.value = month_title(month)
+            budgets = db.get_budgets()
+            spent = {r["category"]: r["total"] for r in db.category_totals(month, "expense")}
+            total = sum(budgets.values())
+            left = total - sum(spent.get(c, 0) for c in budgets)
+            days = calendar.monthrange(int(month[:4]), int(month[5:7]))[1]
+            days_left = days - int(today[8:]) + 1 if month == today[:7] else (days if month > today[:7] else 0)
+            over = bool(total) and left < 0
+            pct = max(0, left) / total if total else 1
+            ring.value, ring.color = pct, ft.Colors.RED if over else YELLOW
+            ring_text.value = "Over" if over else f"{pct * 100:.0f}%"
+            total_t.value, left_t.value = sv.money(total), sv.money(left)
+            left_t.color = ft.Colors.RED if over else None
+            avg_t.value = sv.money(max(left, 0) // days_left if days_left else 0)
+
+            def row(c):
+                limit, used = budgets[c], spent.get(c, 0)
+                is_over = used > limit
+                return ft.Container(
+                    ft.Column([
+                        ft.Row([badge(c, 40),
+                                ft.Column([ft.Text(c, size=16),
+                                           ft.Text(f"{sv.money(used)} of {sv.money(limit)}", size=12,
+                                                   color=ft.Colors.OUTLINE)], spacing=0, expand=True),
+                                ft.Text(f"Over {sv.money(used - limit)}" if is_over else f"{sv.money(limit - used)} left",
+                                        size=13, color=ft.Colors.RED if is_over else ft.Colors.OUTLINE)],
+                               spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        ft.ProgressBar(value=min(used / limit, 1), color=ft.Colors.RED if is_over else YELLOW,
+                                       bgcolor=track, bar_height=8, border_radius=4)], spacing=8),
+                    on_click=lambda e, c=c: edit_budget(c))  # stays on this page: refresh() redraws it
+
+            rows.controls = [row(c) for c in db.CATEGORIES if c in budgets]
+            rows_card.visible = bool(budgets)
+            page.update()
+
+        open_subpage(
+            "Budget",
+            ft.Container(ft.Column([
+                month_button(month_text),
+                ft.Row([ft.Stack([ring, ft.Container(ring_text, width=112, height=112, alignment=ft.Alignment.CENTER)],
+                                 width=112, height=112),
+                        ft.Column([stat("Budget", total_t), stat("Remaining", left_t), stat("Daily avg", avg_t)],
+                                  spacing=10, expand=True)],
+                       spacing=24, vertical_alignment=ft.CrossAxisAlignment.CENTER)], spacing=16),
+                bgcolor=ft.Colors.SURFACE, border_radius=20, padding=20),
+            rows_card,
+            ft.Container(ft.Text("Add new category budget", size=17, color=ft.Colors.OUTLINE,
+                                 style=ft.TextStyle(decoration=ft.TextDecoration.UNDERLINE)),
+                         alignment=ft.Alignment.CENTER, padding=24, on_click=lambda e: open_category_budget_page()),
+            ft.Container(height=60))
+        state["redraw"] = draw
+        draw()
 
     def open_recurring_page():
         refresh_recurring()
         open_subpage("Recurring Transactions", card(
             recurring_col, ft.FilledTonalButton("Add recurring entry", icon=ft.Icons.ADD, on_click=open_recurring)))
+
+    # ---- Calendar page: month grid with daily totals, plus the records of the chosen day ----
+    def open_calendar_page():
+        cal = {"date": ""}
+        month_text = ft.Text(size=22, weight=ft.FontWeight.W_500)
+        weeks = ft.Column(spacing=0)
+        summary = ft.Row(wrap=True, spacing=16, run_spacing=4)
+        day_title = ft.Text(size=18, weight=ft.FontWeight.BOLD)
+        day_list = ft.Column(spacing=10)
+
+        def round_arrow(icon, delta):
+            return ft.Container(ft.Icon(icon, size=18, color=ft.Colors.SURFACE), width=32, height=32,
+                                border_radius=16, bgcolor=ft.Colors.ON_SURFACE, alignment=ft.Alignment.CENTER,
+                                on_click=lambda e: change_month(delta))
+
+        def pick(iso):
+            cal["date"] = iso
+            draw()
+
+        def draw():
+            month, today = state["month"], sv.today()
+            if not cal["date"].startswith(month):  # month changed: select today, or the 1st
+                cal["date"] = today if today.startswith(month) else month + "-01"
+            year, mon = int(month[:4]), int(month[5:7])
+            month_text.value = f"{calendar.month_name[mon]} {year}"
+            rows = db.list_transactions(month)
+            per_day = {}
+            for t in rows:
+                totals = per_day.setdefault(t["date"], [0, 0])  # [income, expense] in cents
+                totals[0 if t["type"] == "income" else 1] += t["amount_cents"]
+
+            def cell(day):
+                if not day:
+                    return ft.Container(expand=True, height=62)
+                iso = f"{month}-{day:02d}"
+                inc, exp = per_day.get(iso, (0, 0))
+                net = inc - exp
+                items = [ft.Text(str(day), size=16, weight=ft.FontWeight.BOLD if iso == today else None,
+                                 color=ft.Colors.OUTLINE if iso > today else None)]
+                if inc or exp:
+                    items.append(ft.Text(f"{net / 100:+,.2f}".replace(".00", ""), size=10,
+                                         color=ft.Colors.GREEN if net >= 0 else ft.Colors.RED))
+                return ft.Container(
+                    ft.Column(items, spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                    expand=True, height=62, border_radius=10, padding=ft.Padding.only(top=6),
+                    bgcolor=ft.Colors.PRIMARY_CONTAINER if iso == today else None,
+                    border=ft.Border.all(2, YELLOW) if iso == cal["date"] else None,
+                    on_click=lambda e, i=iso: pick(i))
+
+            weeks.controls = [ft.Row([cell(d) for d in week], spacing=0)
+                              for week in calendar.Calendar(firstweekday=6).monthdayscalendar(year, mon)]
+            income, expense = db.month_totals(month)
+            summary.controls = [ft.Text(f"Expenses: {sv.money(expense)}", size=13),
+                                ft.Text(f"Income: {sv.money(income)}", size=13),
+                                ft.Text(f"Balance: {sv.money(income - expense)}", size=13)]
+            items = [t for t in rows if t["date"] == cal["date"]]
+            day_title.value = ("Today " if cal["date"] == today else "") + day_label(cal["date"])
+            day_list.controls = [
+                ft.Container(ft.Column([record_tile(t) for t in items], spacing=0), bgcolor=ft.Colors.SURFACE,
+                             border_radius=20, padding=4)
+            ] if items else [ft.Container(ft.Text("No history records", size=16, color=ft.Colors.OUTLINE),
+                                          alignment=ft.Alignment.CENTER, padding=24)]
+            page.update()
+
+        header = ft.Container(
+            ft.Row([ft.Text(d, size=15, weight=ft.FontWeight.W_500, color=BLACK, expand=True,
+                            text_align=ft.TextAlign.CENTER) for d in ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")],
+                   spacing=0),
+            bgcolor=YELLOW, border_radius=14, padding=ft.Padding.symmetric(vertical=12))
+        open_subpage(
+            "Calendar",
+            ft.Row([round_arrow(ft.Icons.CHEVRON_LEFT, -1), ft.Container(month_text, on_click=pick_month),
+                    round_arrow(ft.Icons.CHEVRON_RIGHT, 1)], alignment=ft.MainAxisAlignment.CENTER, spacing=16),
+            ft.Container(ft.Column([header, weeks, summary], spacing=8), bgcolor=ft.Colors.SURFACE,
+                         border_radius=20, padding=ft.Padding.only(left=4, right=4, bottom=14)),
+            day_title, day_list,
+            ft.Row([yellow_plus(lambda e: open_entry(date=cal["date"]))], alignment=ft.MainAxisAlignment.CENTER),
+            ft.Container(height=60))
+        state["redraw"] = draw
+        draw()
+
+    # ---- Search page: search box + Type / Category / Account filters, across all months ----
+    def open_search_page():
+        s = {"q": "", "kind": "", "category": "", "wallet": "", "open": "", "draft": ""}
+        TITLES = {"kind": "Type", "category": "Category", "wallet": "Account"}
+
+        def options_for(key):
+            if key == "kind":
+                return [("expense", "Expense"), ("income", "Income")]
+            return [(c, c) for c in (db.CATEGORIES if key == "category" else db.WALLETS)]
+
+        box = field(hint_text="Search notes or categories", prefix_icon=ft.Icons.SEARCH, expand=True, autofocus=True,
+                    on_change=lambda e: (s.update(q=(e.control.value or "").strip()), draw()))
+        filter_row = ft.Row(scroll=ft.ScrollMode.AUTO, spacing=8)
+        panel = ft.Container(visible=False, bgcolor=ft.Colors.SURFACE, border_radius=20, padding=16)
+        n_text, exp_text, inc_text = amount_text(), amount_text(), amount_text()
+        summary = card(ft.Row([stat_cell("Records", n_text), divider(),
+                               stat_cell("Expenses", exp_text, ft.Icons.ARROW_UPWARD, ft.Colors.RED), divider(),
+                               stat_cell("Income", inc_text, ft.Icons.ARROW_DOWNWARD, ft.Colors.GREEN)]))
+        results = ft.Column(spacing=10)
+
+        def toggle_panel(key):
+            s["open"] = "" if s["open"] == key else key
+            s["draft"] = s[key] if s["open"] else ""
+            draw()
+
+        def pick_option(value):
+            s["draft"] = "" if s["draft"] == value else value
+            draw()
+
+        def confirm_panel(e):
+            s[s["open"]], s["open"] = s["draft"], ""
+            draw()
+
+        def reset_panel(e):
+            s[s["open"]], s["open"] = "", ""
+            draw()
+
+        def filter_button(key):
+            chosen = dict(options_for(key)).get(s[key], "")
+            opened = s["open"] == key
+            return ft.Container(
+                ft.Row([ft.Text(chosen or TITLES[key], size=14),
+                        ft.Icon(ft.Icons.ARROW_DROP_UP if opened else ft.Icons.ARROW_DROP_DOWN, size=20)],
+                       tight=True, spacing=2),
+                padding=ft.Padding.symmetric(horizontal=14, vertical=8), border_radius=10, bgcolor=ft.Colors.SURFACE,
+                border=ft.Border.all(1.5, YELLOW) if (chosen or opened) else None,
+                on_click=lambda e, k=key: toggle_panel(k))
+
+        def option_chip(value, text):
+            on = s["draft"] == value
+            return ft.Container(ft.Text(text, size=14, color=BLACK if on else None),
+                                padding=ft.Padding.symmetric(horizontal=14, vertical=8), border_radius=20,
+                                bgcolor=YELLOW if on else ft.Colors.with_opacity(0.08, ft.Colors.ON_SURFACE),
+                                on_click=lambda e, v=value: pick_option(v))
+
+        def draw():
+            filter_row.controls = [filter_button(k) for k in TITLES]
+            panel.visible = bool(s["open"])
+            if s["open"]:
+                panel.content = ft.Column([
+                    ft.Row([option_chip(v, t) for v, t in options_for(s["open"])], wrap=True, spacing=8, run_spacing=8),
+                    ft.Row([ft.OutlinedButton("Reset", height=46, expand=True, on_click=reset_panel),
+                            ft.FilledButton("Confirm", height=46, expand=True, on_click=confirm_panel)], spacing=12),
+                ], spacing=16)
+            searching = any(s[k] for k in ("q", "kind", "category", "wallet"))
+            rows = db.list_transactions(None, s["q"], s["category"], s["kind"], s["wallet"]) if searching else []
+            n_text.value = str(len(rows))
+            exp_text.value = sv.money(sum(t["amount_cents"] for t in rows if t["type"] == "expense"))
+            inc_text.value = sv.money(sum(t["amount_cents"] for t in rows if t["type"] == "income"))
+            out, groups = [], {}
+            for t in rows:
+                groups.setdefault(t["date"], []).append(t)
+            for day, items in groups.items():
+                out.append(ft.Text(day_label(day) + f"  {day[:4]}", size=15, weight=ft.FontWeight.BOLD))
+                out.append(ft.Container(ft.Column([record_tile(t) for t in items], spacing=0),
+                                        bgcolor=ft.Colors.SURFACE, border_radius=20, padding=4))
+            if not rows:
+                out = [ft.Container(ft.Column([
+                    ft.Icon(ft.Icons.SEARCH if not searching else ft.Icons.SEARCH_OFF, size=64,
+                            color=ft.Colors.OUTLINE),
+                    ft.Text("No records found" if searching else "Type a keyword or pick a filter",
+                            size=16, color=ft.Colors.OUTLINE)],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
+                    alignment=ft.Alignment.CENTER, padding=48)]
+            results.controls = out
+            page.update()
+
+        open_subpage(box, filter_row, panel, summary, results, ft.Container(height=60))
+        state["redraw"] = draw
+        draw()
 
     nav_row = ft.Row(vertical_alignment=ft.CrossAxisAlignment.CENTER)
     NAV = [("Home", ft.Icons.HOME), ("Reports", ft.Icons.BAR_CHART), ("Accounts", ft.Icons.ACCOUNT_BALANCE_WALLET),
@@ -1170,6 +1394,7 @@ def main(page: ft.Page):
 
     def show_tab(index):
         state["tab"] = index
+        state["redraw"] = None
         body.content = tabs[index]
         state["sub"] = False
         build_nav()
@@ -1248,6 +1473,8 @@ def main(page: ft.Page):
                                  bgcolor=YELLOW, alignment=ft.Alignment.CENTER),
                     ft.Text(name, size=17, expand=True), ft.Text(sv.money(bal), size=17)], spacing=14)
             for name, bal in balances.items()]
+        if state.get("redraw"):  # a Calendar/Search page is open: keep it in step with edits
+            state["redraw"]()
         page.update()
 
     page.bottom_appbar = ft.BottomAppBar(content=nav_row, shape=ft.CircularRectangleNotchShape(), notch_margin=6,
