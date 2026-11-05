@@ -181,15 +181,13 @@ def main(page: ft.Page):
             "wallet": t["wallet"] if t else "Wallet", "date": t["date"] if t else (date or sv.today()),
             "text": f"{t['amount_cents'] / 100:.2f}".rstrip("0").rstrip(".") if t else "",
         }
-        display = field(  # type here with the phone keyboard, or use the keypad below (both stay in sync)
+        display = field(  # the amount is entered with the keypad below only (read-only, no phone keyboard)
             prefix_text=prefix(), hint_text="0", text_size=34, text_align=ft.TextAlign.RIGHT,
-            text_style=ft.TextStyle(weight=ft.FontWeight.BOLD), keyboard_type=ft.KeyboardType.NUMBER,
-            input_filter=ft.InputFilter(allow=True, regex_string=r"[0-9.+\-]", replacement_string=""),
-            on_change=lambda e: form.update({"text": e.control.value or ""}))
+            text_style=ft.TextStyle(weight=ft.FontWeight.BOLD), read_only=True)
         date_label = ft.Text(size=13)
         memo = field(label="Memo", value=t["note"] if t else "", prefix_icon=ft.Icons.EDIT_NOTE)
         error = ft.Text(color=ft.Colors.RED)
-        grid = ft.Row(wrap=True, spacing=4, run_spacing=6, alignment=ft.MainAxisAlignment.CENTER)
+        grid = ft.Column(spacing=14)  # rows of 4 equal columns, so names never wrap on narrow phones
 
         def choose(c):
             form["category"] = c
@@ -198,13 +196,19 @@ def main(page: ft.Page):
         def show():
             display.value = form["text"]
             date_label.value = "Today" if form["date"] == sv.today() else form["date"][5:]
-            grid.controls = [
+            cells = [
                 ft.Container(
-                    ft.Column([badge(c, 50, c == form["category"]), ft.Text(c, size=11)], spacing=2,
+                    ft.Column([badge(c, 50, c == form["category"]),
+                               ft.Text(c, size=11, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
+                                       text_align=ft.TextAlign.CENTER)], spacing=2,
                               horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                    width=78, on_click=lambda e, c=c: choose(c))
+                    expand=True, on_click=lambda e, c=c: choose(c))
                 for c in db.CATEGORIES
             ]
+            grid.controls = [
+                ft.Row(cells[i:i + 4] + [ft.Container(expand=True) for _ in range(4 - len(cells[i:i + 4]))],
+                       spacing=0, vertical_alignment=ft.CrossAxisAlignment.START)
+                for i in range(0, len(cells), 4)]
             page.update()
 
         def press(key):
@@ -632,8 +636,9 @@ def main(page: ft.Page):
     def divider():
         return ft.Container(width=1, height=36, bgcolor=ft.Colors.with_opacity(0.3, ft.Colors.OUTLINE))
 
-    def amount_text(size=20):
-        return ft.Text(size=size, weight=ft.FontWeight.W_500)
+    def amount_text(size=18):  # one line only; too-long numbers end in "..." instead of wrapping
+        return ft.Text(size=size, weight=ft.FontWeight.W_500, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
+                       text_align=ft.TextAlign.CENTER)
 
     def yellow_plus(on_click):
         return ft.Container(ft.Icon(ft.Icons.ADD, color=BLACK), width=48, height=48, border_radius=24,
@@ -666,13 +671,12 @@ def main(page: ft.Page):
         return ft.Container(
             ft.Row([
                 badge(t["category"]),
-                ft.Column([ft.Text(t["category"], size=16),
-                           ft.Text(f"{t['wallet']}  {t['note']}".strip(), size=12, color=ft.Colors.OUTLINE)],
+                ft.Column([ft.Text(t["category"], size=16, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                           ft.Text(f"{t['wallet']}  {t['note']}".strip(), size=12, color=ft.Colors.OUTLINE,
+                                   max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)],
                           spacing=0, expand=True),
-                ft.Text(f"{'+' if income else '-'}{sv.money(t['amount_cents'])}", size=16,
-                        color=ft.Colors.GREEN if income else None),
-                ft.IconButton(ft.Icons.EDIT_OUTLINED, icon_size=20, tooltip="Edit",
-                              on_click=lambda e, t=t: open_entry(t))],
+                ft.Text(f"{'+' if income else '-'}{sv.money(t['amount_cents'])}", size=16, no_wrap=True,
+                        color=ft.Colors.GREEN if income else None)],  # tap the row to edit
                 vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
             padding=ft.Padding.symmetric(horizontal=12, vertical=10), ink=True,
             on_click=lambda e, t=t: open_entry(t))
@@ -691,10 +695,14 @@ def main(page: ft.Page):
         for day, items in groups.items():
             exp = sum(t["amount_cents"] for t in items if t["type"] == "expense")
             inc = sum(t["amount_cents"] for t in items if t["type"] == "income")
-            out.append(ft.Row([ft.Text(day_label(day), size=16, weight=ft.FontWeight.BOLD),
-                               ft.Text(f"Expenses: {sv.money(exp)}   Income: {sv.money(inc)}", size=12,
-                                       color=ft.Colors.OUTLINE)],
-                              alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True))
+            totals = [ft.Row([ft.Icon(arrow, size=14, color=color),
+                              ft.Text(sv.money(amount), size=13, color=ft.Colors.OUTLINE, no_wrap=True)],
+                             tight=True, spacing=2)
+                      for arrow, color, amount in ((ft.Icons.ARROW_UPWARD, ft.Colors.RED, exp),
+                                                   (ft.Icons.ARROW_DOWNWARD, ft.Colors.GREEN, inc)) if amount]
+            out.append(ft.Row([ft.Text(day_label(day), size=16, weight=ft.FontWeight.BOLD, no_wrap=True),
+                               ft.Row(totals, tight=True, spacing=10)],
+                              alignment=ft.MainAxisAlignment.SPACE_BETWEEN))
             out.append(ft.Container(ft.Column([record_tile(t) for t in items], spacing=0),
                                     bgcolor=ft.Colors.SURFACE, border_radius=20, padding=4))
         return out

@@ -363,7 +363,8 @@ def export_data() -> dict:
 
 
 def _money_ok(value) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+    # Upper bound only protects SQLite from overflow; old records above the new input limit still import.
+    return isinstance(value, int) and not isinstance(value, bool) and 0 < value < 2 ** 53
 
 
 def validate_backup(data) -> None:

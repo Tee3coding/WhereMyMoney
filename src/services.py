@@ -3,6 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 CURRENCY = "RM"
+MAX_CENTS = 99_999_999_999  # 999,999,999.99 per record
 
 
 def calc(expr: str) -> Decimal:
@@ -19,7 +20,10 @@ def parse_amount(text: str) -> int:
     value = calc(text)
     if value <= 0:
         raise ValueError("Amount must be greater than 0")
-    return int((value * 100).to_integral_value())
+    cents = int((value * 100).to_integral_value())
+    if cents > MAX_CENTS:  # keeps every total far below SQLite's integer limit
+        raise ValueError(f"Amount can't be more than {MAX_CENTS / 100:,.2f}")
+    return cents
 
 
 def parse_date(text: str) -> str:
@@ -32,7 +36,11 @@ def parse_date(text: str) -> str:
 
 
 def money(cents: int) -> str:
-    return f"{CURRENCY} {cents / 100:,.2f}"
+    """'RM333', '-RM5.50': no space, and no '.00' on whole amounts (keeps big numbers short)."""
+    text = f"{abs(cents) / 100:,.2f}"
+    if text.endswith(".00"):
+        text = text[:-3]
+    return f"{'-' if cents < 0 else ''}{CURRENCY}{text}"
 
 
 def today() -> str:
