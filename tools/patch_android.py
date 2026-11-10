@@ -17,6 +17,7 @@ PERMISSIONS = [
     "android.permission.POST_NOTIFICATIONS",
     "android.permission.RECEIVE_BOOT_COMPLETED",
     "android.permission.USE_BIOMETRIC",  # fingerprint unlock for the app lock
+    "android.permission.VIBRATE",        # tap vibration (HapticReceiver)
 ]
 COMPONENTS = """
         <activity

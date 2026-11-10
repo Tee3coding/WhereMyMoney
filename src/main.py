@@ -3,6 +3,7 @@ import asyncio
 import calendar
 import math
 import re
+import socket
 import time
 from datetime import datetime
 
@@ -165,6 +166,18 @@ def main(page: ft.Page):
         """A short vibration: light (taps), select (choices), medium (saved), heavy (errors/deletes)."""
         if not state["haptics"] or page.platform not in (ft.PagePlatform.ANDROID, ft.PagePlatform.IOS):
             return
+        if page.platform == ft.PagePlatform.ANDROID and time.time() > state.get("native_retry", 0):
+            try:  # preferred: the native motor buzz (tools/android/HapticReceiver.java), not tied to touch-feedback settings
+                if "buzz_socket" not in state:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    sock.setblocking(False)
+                    sock.connect(("127.0.0.1", 47831))
+                    state["buzz_socket"] = sock
+                state["buzz_socket"].send(kind[0].encode())
+                return
+            except OSError:  # nothing is listening (old APK / patch step skipped): use Flutter's haptics for a while
+                state.pop("buzz_socket", None)
+                state["native_retry"] = time.time() + 30
         action = {"light": haptic.light_impact, "select": haptic.selection_click,
                   "medium": haptic.medium_impact, "heavy": haptic.heavy_impact}[kind]
         try:
