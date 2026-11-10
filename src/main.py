@@ -142,6 +142,7 @@ def main(page: ft.Page):
 
     def confirm(title, text, on_yes, yes_label="Delete"):
         def yes(e):
+            buzz("heavy")
             page.pop_dialog()
             on_yes()
 
@@ -154,6 +155,45 @@ def main(page: ft.Page):
 
     def prefix():
         return f"{sv.CURRENCY} "
+
+    # ================= TOUCH FEEDBACK (optional vibration + press animation) =================
+    haptic = ft.HapticFeedback()
+    page.services.append(haptic)
+    state["haptics"] = db.get_setting("device_haptics", "1") == "1"
+
+    def buzz(kind="light"):
+        """A short vibration: light (taps), select (choices), medium (saved), heavy (errors/deletes)."""
+        if not state["haptics"] or page.platform not in (ft.PagePlatform.ANDROID, ft.PagePlatform.IOS):
+            return
+        action = {"light": haptic.light_impact, "select": haptic.selection_click,
+                  "medium": haptic.medium_impact, "heavy": haptic.heavy_impact}[kind]
+        try:
+            page.run_task(action)
+        except Exception:  # a phone without a vibration motor must never break typing
+            pass
+
+    async def release(box):
+        await asyncio.sleep(0.12)
+        try:
+            box.scale = 1
+            box.update()
+        except Exception:  # the control was replaced or closed in the meantime
+            pass
+
+    def feel(box, kind="light"):
+        """Press feedback for a tappable Container: ripple, a quick squash-and-spring animation, vibration."""
+        box.ink = True
+        box.scale = 1
+        box.animate_scale = ft.Animation(100, ft.AnimationCurve.EASE_OUT)
+
+        def down(e):
+            buzz(kind)
+            box.scale = 0.92
+            box.update()
+            page.run_task(release, box)
+
+        box.on_tap_down = down
+        return box
 
     # ================= MONTH HELPERS =================
     month_labels = []
@@ -198,12 +238,12 @@ def main(page: ft.Page):
             display.value = form["text"]
             date_label.value = "Today" if form["date"] == sv.today() else form["date"][5:]
             cells = [
-                ft.Container(
+                feel(ft.Container(
                     ft.Column([badge(c, 50, c == form["category"]),
                                ft.Text(c, size=11, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
                                        text_align=ft.TextAlign.CENTER)], spacing=2,
                               horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                    expand=True, on_click=lambda e, c=c: choose(c))
+                    expand=True, border_radius=12, on_click=lambda e, c=c: choose(c)), "select")
                 for c in db.CATEGORIES
             ]
             grid.controls = [
@@ -243,15 +283,16 @@ def main(page: ft.Page):
             content = (ft.Row([ft.Icon(ft.Icons.CALENDAR_MONTH, size=16), date_label], spacing=4,
                               alignment=ft.MainAxisAlignment.CENTER)
                        if key == "date" else ft.Text("−" if key == "-" else key, size=20))
-            return ft.Container(
+            return feel(ft.Container(
                 content, height=50, expand=True, alignment=ft.Alignment.CENTER, border_radius=14,
                 bgcolor=ft.Colors.PRIMARY_CONTAINER if key in ("+", "-", "=", "date") else ft.Colors.SURFACE,
-                on_click=(lambda e: pick_date()) if key == "date" else (lambda e, k=key: press(k)))
+                on_click=(lambda e: pick_date()) if key == "date" else (lambda e, k=key: press(k))))
 
         def save(e):
             try:
                 cents = sv.parse_amount(form["text"].rstrip("+-."))
             except ValueError as problem:
+                buzz("heavy")
                 error.value = str(problem)
                 page.update()
                 return
@@ -260,6 +301,7 @@ def main(page: ft.Page):
                 db.update_transaction(t["id"], *args)
             else:
                 db.add_transaction(*args)
+            buzz("medium")
             page.pop_dialog()
             refresh()
             toast("Saved")
@@ -603,11 +645,11 @@ def main(page: ft.Page):
             content = (ft.Row([ft.Icon(icon, size=20, color=BLACK),
                                ft.Text(tip, size=14, color=BLACK, weight=ft.FontWeight.W_500)], tight=True, spacing=6)
                        if on else ft.Icon(icon, size=20, color=color or ft.Colors.ON_SURFACE))
-            return ft.Container(content, width=None if on else 40, height=40, border_radius=20,
-                                alignment=ft.Alignment.CENTER, tooltip=tip,
-                                padding=ft.Padding.symmetric(horizontal=14) if on else None,
-                                bgcolor=YELLOW if on else None,
-                                on_click=lambda e, k=key, v=value: toggle_filter(k, v))
+            return feel(ft.Container(content, width=None if on else 40, height=40, border_radius=20,
+                                     alignment=ft.Alignment.CENTER, tooltip=tip,
+                                     padding=ft.Padding.symmetric(horizontal=14) if on else None,
+                                     bgcolor=YELLOW if on else None,
+                                     on_click=lambda e, k=key, v=value: toggle_filter(k, v)), "select")
 
         for row, key in group_rows:
             row.controls = [option(key, value, icon, tip, color) for value, icon, tip, color in GROUPS[key]]
@@ -618,12 +660,12 @@ def main(page: ft.Page):
         def chip(name):
             value = "" if name == ALL else name
             on = fl["category"] == value
-            return ft.Container(
+            return feel(ft.Container(
                 ft.Row([ft.Icon(CATEGORY_ICONS.get(name, I.MORE_HORIZ), size=16, color=BLACK if on else None),
                         ft.Text(name, size=13, color=BLACK if on else None)], tight=True, spacing=6),
                 padding=ft.Padding.symmetric(horizontal=12, vertical=8), border_radius=20,
                 bgcolor=YELLOW if on else ft.Colors.SURFACE,
-                on_click=lambda e, v=value: toggle_filter("category", v))
+                on_click=lambda e, v=value: toggle_filter("category", v)), "select")
         chip_row.controls = [chip(n) for n in [ALL] + db.CATEGORIES]
 
     def wallet_filter():
@@ -642,8 +684,8 @@ def main(page: ft.Page):
                        text_align=ft.TextAlign.CENTER)
 
     def yellow_plus(on_click):
-        return ft.Container(ft.Icon(ft.Icons.ADD, color=BLACK), width=48, height=48, border_radius=24,
-                            bgcolor=YELLOW, alignment=ft.Alignment.CENTER, on_click=on_click)
+        return feel(ft.Container(ft.Icon(ft.Icons.ADD, color=BLACK), width=48, height=48, border_radius=24,
+                                 bgcolor=YELLOW, alignment=ft.Alignment.CENTER, on_click=on_click), "medium")
 
     # ================= HOME =================
     home_month = ft.Text(size=26, weight=ft.FontWeight.W_500)
@@ -845,6 +887,14 @@ def main(page: ft.Page):
 
     # ================= MINE =================
     m_exp, m_inc, m_count = amount_text(), amount_text(), amount_text()
+
+    def on_haptics_switch(e):
+        state["haptics"] = bool(e.control.value)
+        db.set_setting("device_haptics", "1" if state["haptics"] else "0")
+        buzz("medium")  # a sample, so you feel what you just switched on
+
+    haptics_switch = ft.Switch(label="Vibrate when tapping", value=state["haptics"], on_change=on_haptics_switch,
+                               disabled=page.platform not in (ft.PagePlatform.ANDROID, ft.PagePlatform.IOS))
     open_add_switch = ft.Switch(
         label="Open on the Add screen at launch", value=db.get_setting("open_add", "0") == "1",
         on_change=lambda e: db.set_setting("open_add", "1" if e.control.value else "0"))
@@ -895,7 +945,12 @@ def main(page: ft.Page):
                                                card(label("LAUNCH"), open_add_switch,
                                                     ft.Text("Opens the new-record panel straight away, so one tap "
                                                             "on the app icon is enough to add a record.", size=12)),
-                                               card(label("QUICK ADD"), notify_switch, notify_note))),
+                                               card(label("QUICK ADD"), notify_switch, notify_note),
+                                               card(label("FEEDBACK"), haptics_switch,
+                                                    ft.Text("A short vibration on keypad taps, choices and "
+                                                            "when something is saved. Phones with touch "
+                                                            "vibration turned off in system settings stay silent.",
+                                                            size=12)))),
                    tile(ft.Icons.FOLDER_OPEN, "#5AA9E6", "Export Data", open_export),
                    tile(ft.Icons.DOWNLOAD, "#4FB477", "Import Data", open_import)),
          ft.Container(height=100)],
@@ -918,8 +973,9 @@ def main(page: ft.Page):
     def lock_key(k):
         if k == "":
             return ft.Container(width=72, height=72)
-        return ft.Container(ft.Text(k, size=26), width=72, height=72, border_radius=36, alignment=ft.Alignment.CENTER,
-                            bgcolor=None if k == "⌫" else ft.Colors.SURFACE, on_click=lambda e, k=k: lock_press(k))
+        return feel(ft.Container(ft.Text(k, size=26), width=72, height=72, border_radius=36,
+                                 alignment=ft.Alignment.CENTER, bgcolor=None if k == "⌫" else ft.Colors.SURFACE,
+                                 on_click=lambda e, k=k: lock_press(k)))
 
     def lock_press(k):
         pin = lock_state["pin"]
@@ -936,12 +992,14 @@ def main(page: ft.Page):
             lock_msg.value = f"Too many tries. Wait {int(wait) + 1} seconds."
         elif sv.check_pin(pin, db.get_setting("lock", "")):
             db.set_setting("lock_fails", "0")
+            buzz("medium")
             unlock()
             return
         else:
             fails = int(db.get_setting("lock_fails", "0") or 0) + 1
             db.set_setting("lock_fails", str(fails))
             lock_msg.value = "Wrong PIN"
+            buzz("heavy")
             if fails % 5 == 0:  # every 5 wrong tries the wait grows: 30s, 60s, 90s...
                 db.set_setting("lock_until", str(time.time() + 30 * (fails // 5)))
                 lock_msg.value = f"Too many tries. Wait {30 * (fails // 5)} seconds."
@@ -1440,10 +1498,10 @@ def main(page: ft.Page):
         items = []
         for i, (name, icon) in enumerate(NAV):
             color = YELLOW if state["tab"] == i else ft.Colors.OUTLINE
-            items.append(ft.Container(
+            items.append(feel(ft.Container(
                 ft.Column([ft.Icon(icon, color=color, size=26), ft.Text(name, size=11, color=color)],
                           horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=2),
-                expand=True, on_click=lambda e, i=i: show_tab(i)))
+                expand=True, on_click=lambda e, i=i: show_tab(i)), "select"))
         plus_visible = state["tab"] == 0 and not state.get("sub")  # the + button lives on Home only
         nav_row.controls = items[:2] + ([ft.Container(width=76)] if plus_visible else []) + items[2:]
         page.floating_action_button.visible = plus_visible
@@ -1537,7 +1595,7 @@ def main(page: ft.Page):
                                          bgcolor=ft.Colors.SURFACE, height=72, padding=0)
     page.floating_action_button = ft.FloatingActionButton(
         icon=ft.Icons.ADD, bgcolor=YELLOW, foreground_color=BLACK, shape=ft.CircleBorder(),
-        on_click=lambda e: open_entry())
+        on_click=lambda e: (buzz("medium"), open_entry()))
     page.floating_action_button_location = ft.FloatingActionButtonLocation.CENTER_DOCKED
     main_area = ft.SafeArea(body, expand=True)
     page.add(main_area, lock_screen)
